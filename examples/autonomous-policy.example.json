@@ -1,0 +1,24 @@
+{
+  "daily_cap": 25,
+  "city": "target-site-city-code",
+  "salary_param": "target-site-salary-filter",
+  "minimum_monthly_salary_k": null,
+  "search_keywords": [
+    "target-role-keyword"
+  ],
+  "role_include_terms": [],
+  "title_reject_terms": [],
+  "ignored_model_risk_patterns": [
+    "Example employer-side requirement to ignore when private policy allows it"
+  ],
+  "profile_analysis_path": "~/.local/share/resume-pilot/profile-analysis.json",
+  "include_profile_keywords": true,
+  "llm_policy": {
+    "candidate_side_requirements_are_authoritative": true,
+    "ignore_employer_side_requirements_when_private_policy_says_so": true,
+    "decision_notes": [
+      "Replace this object with private, candidate-specific policy outside the repository.",
+      "Do not commit the real policy file, resume profile, screenshots, browser profile, or state database."
+    ]
+  }
+}

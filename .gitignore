@@ -209,6 +209,34 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# resume-pilot private runtime state and candidate data
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite3-journal
+*.log
+.local/
+state.sqlite
+state.sqlite-journal
+autonomous-policy.json
+profile-analysis.json
+profile.json
+chrome-profile/
+browser.pid
+browser.log
+screenshots/
+dom-dumps/
+audit/
+run-artifacts/
+
+# Agent-local memory and handoff artifacts
+.codex/
+.claude/
+memory/
+memories/
+handoff/
+handoffs/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
