@@ -185,6 +185,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument("--url", default=None, help="Optional inbox URL to open before inspection.")
     watch.set_defaults(func=cmd_inbox_watch)
+
+    pauses = subparsers.add_parser("pauses", help="Inspect or resolve human-takeover pauses.")
+    pauses_subparsers = pauses.add_subparsers(required=True)
+    pauses_subparsers.add_parser("list", help="List unresolved pauses.").set_defaults(
+        func=cmd_pauses, pauses_command="list"
+    )
+    pauses_subparsers.add_parser(
+        "resolve", help="Mark all unresolved pauses resolved so runs can resume."
+    ).set_defaults(func=cmd_pauses, pauses_command="resolve")
     return parser
 
 
@@ -285,6 +294,22 @@ def cmd_browser(args: argparse.Namespace) -> int:
     if command == "stop":
         return 0 if not status.running else 1
     return 0 if status.running else 1
+
+
+def cmd_pauses(args: argparse.Namespace) -> int:
+    store = StateStore(_paths(args).state_db)
+    if args.pauses_command == "resolve":
+        _print_json({"resolved": store.resolve_pauses()})
+        return 0
+    _print_json(
+        {
+            "active_pauses": [
+                {"id": row["id"], "reason": row["reason"], "created_at": row["created_at"]}
+                for row in store.active_pauses()
+            ]
+        }
+    )
+    return 0
 
 
 def cmd_profile_extract(args: argparse.Namespace) -> int:

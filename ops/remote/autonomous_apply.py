@@ -21,6 +21,7 @@ from resume_pilot.boss import (
 )
 from resume_pilot.browser import LOOPBACK_CDP_HOSTS, BrowserManager
 from resume_pilot.cdp import (
+    CdpClickError,
     CdpError,
     cdp_bring_to_front,
     cdp_dispatch_mouse_click,
@@ -710,10 +711,14 @@ async def click_immediate_contact(
             float(result["y"]),
             bring_to_front=False,
         )
-    except Exception as exc:
-        # The move/press/release sequence did not complete, so no platform click
-        # landed. Tag it as a pre-click abort so process_job releases the
-        # reservation instead of confirming a contact that never happened.
+    except CdpClickError as exc:
+        if exc.dispatched:
+            # A mouse button event was already sent, so the click may have landed.
+            # Let it reach the post-click (confirm) path rather than releasing and
+            # risking a duplicate message to the same recruiter on a later run.
+            raise
+        # No mouse event was sent (failure before the press), so no platform click
+        # landed — a pre-click abort that releases the reservation.
         raise RuntimeError(f"contact_button_not_safe:dispatch_failed:{exc}") from exc
     fallback_navigation_used = False
     post_text = ""
@@ -724,7 +729,11 @@ async def click_immediate_contact(
         await asyncio.sleep(1.0)
         post_text = await page_text(target)
         post_risks = visible_page_risk_payload(post_text)
-        markers_seen = any(marker in post_text for marker in SUCCESS_MARKERS)
+        # Require the marker to newly appear after the click; markers already
+        # visible before the click (nav, another conversation) are not evidence.
+        markers_seen = any(
+            marker in post_text and marker not in before_text for marker in SUCCESS_MARKERS
+        )
         if markers_seen or post_risks:
             break
     raw_click_events = await cdp_evaluate(

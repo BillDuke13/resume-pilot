@@ -19,6 +19,19 @@ class CdpError(RuntimeError):
     """Raised when direct CDP control cannot complete safely."""
 
 
+class CdpClickError(CdpError):
+    """Raised when a CDP mouse click could not complete.
+
+    ``dispatched`` is True once a mouse button event (press/release) has been
+    sent, so the click may have reached the page; such a contact must not be
+    released as if it never happened.
+    """
+
+    def __init__(self, message: str, *, dispatched: bool):
+        super().__init__(message)
+        self.dispatched = dispatched
+
+
 @dataclass(frozen=True)
 class CdpTarget:
     url: str
@@ -237,6 +250,7 @@ async def cdp_dispatch_mouse_click(
     *,
     bring_to_front: bool = True,
 ) -> None:
+    button_event_sent = False
     try:
         async with websockets.connect(web_socket_url, max_size=30_000_000) as socket:
             next_id = 1
@@ -272,6 +286,10 @@ async def cdp_dispatch_mouse_click(
                     raise CdpError(json.dumps(response["error"], ensure_ascii=False))
 
             for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
+                if event_type != "mouseMoved":
+                    # A button press/release is about to go out; once attempted the
+                    # page may register the click, so a later failure is post-dispatch.
+                    button_event_sent = True
                 response = await send(
                     "Input.dispatchMouseEvent",
                     {
@@ -285,10 +303,15 @@ async def cdp_dispatch_mouse_click(
                 )
                 if "error" in response:
                     raise CdpError(json.dumps(response["error"], ensure_ascii=False))
-    except CdpError:
+    except CdpClickError:
         raise
+    except CdpError as exc:
+        raise CdpClickError(str(exc), dispatched=button_event_sent) from exc
     except Exception as exc:
-        raise CdpError(f"CDP mouse click failed: {type(exc).__name__}: {exc}") from exc
+        raise CdpClickError(
+            f"CDP mouse click failed: {type(exc).__name__}: {exc}",
+            dispatched=button_event_sent,
+        ) from exc
 
 
 def open_url_in_visible_chrome(url: str, *, display: str = ":1") -> None:

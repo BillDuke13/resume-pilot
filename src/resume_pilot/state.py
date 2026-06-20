@@ -4,7 +4,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -18,6 +18,12 @@ from resume_pilot.models import (
     LlmJobDecisionValue,
     LlmReplyDecision,
 )
+
+# A contact reservation is held only for the few seconds of the click flow. One
+# left behind longer than this is from a run that died mid-click: it no longer
+# counts toward the daily cap and may be cleared so the job can be retried, while
+# a still-recent reservation belongs to a live run and must be left intact.
+RESERVATION_TTL_SECONDS = 600
 
 
 class StateError(Exception):
@@ -262,14 +268,21 @@ class StateStore:
         timezone: str = DEFAULT_TIMEZONE,
     ) -> int:
         day = action_date(when, timezone)
+        active_since = isoformat_utc(
+            (when or utc_now()) - timedelta(seconds=RESERVATION_TTL_SECONDS)
+        )
         with self.connect() as connection:
             row = connection.execute(
                 """
                 SELECT COUNT(*) AS count
                 FROM application_actions
                 WHERE action = ? AND action_date = ? AND dry_run = 0
+                  AND (
+                      COALESCE(json_extract(details, '$.reserved'), 0) = 0
+                      OR created_at >= ?
+                  )
                 """,
-                (action.value, day),
+                (action.value, day, active_since),
             ).fetchone()
             return int(row["count"])
 
@@ -405,6 +418,7 @@ class StateStore:
         timestamp = when or utc_now()
         day = action_date(timestamp, timezone)
         now = isoformat_utc(timestamp)
+        active_since = isoformat_utc(timestamp - timedelta(seconds=RESERVATION_TTL_SECONDS))
         payload = {**(details or {}), "reserved": True}
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -412,32 +426,41 @@ class StateStore:
                 """
                 SELECT id FROM application_actions
                 WHERE job_id = ? AND action = ? AND dry_run = 0
-                  AND COALESCE(json_extract(details, '$.reserved'), 0) = 0
+                  AND (
+                      COALESCE(json_extract(details, '$.reserved'), 0) = 0
+                      OR created_at >= ?
+                  )
                 """,
-                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value),
+                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value, active_since),
             ).fetchone()
             if existing:
                 raise DuplicateActionError(
                     f"immediate_contact already recorded for job {job_id}"
                 )
-            # Clear a stale reservation from a prior run that died before confirming.
-            # The partial unique index allows only one dry_run=0 row per job, so the
-            # INSERT below would otherwise fail and the job would be skipped forever.
+            # Clear only a provably stale reservation (older than the click-flow TTL,
+            # so from a run that died mid-click). The partial unique index allows one
+            # dry_run=0 row per job, so the stale row must go before the INSERT below;
+            # a still-active reservation is left intact and blocks via the check above.
             connection.execute(
                 """
                 DELETE FROM application_actions
                 WHERE job_id = ? AND action = ? AND dry_run = 0
                   AND COALESCE(json_extract(details, '$.reserved'), 0) = 1
+                  AND created_at < ?
                 """,
-                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value),
+                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value, active_since),
             )
             row = connection.execute(
                 """
                 SELECT COUNT(*) AS count
                 FROM application_actions
                 WHERE action = ? AND action_date = ? AND dry_run = 0
+                  AND (
+                      COALESCE(json_extract(details, '$.reserved'), 0) = 0
+                      OR created_at >= ?
+                  )
                 """,
-                (ApplicationAction.IMMEDIATE_CONTACT.value, day),
+                (ApplicationAction.IMMEDIATE_CONTACT.value, day, active_since),
             ).fetchone()
             if int(row["count"]) >= daily_cap:
                 raise BudgetExceededError(
@@ -662,6 +685,20 @@ class StateStore:
                     "SELECT * FROM pauses WHERE resolved_at IS NULL ORDER BY created_at DESC"
                 )
             )
+
+    def resolve_pauses(self) -> int:
+        """Mark every active pause resolved so the autonomous runner can resume.
+
+        The startup gate refuses to run while any pause is unresolved; an operator
+        calls this after handling the captcha/manual-verification in VNC.
+        """
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE pauses SET resolved_at = ? WHERE resolved_at IS NULL",
+                (isoformat_utc(),),
+            )
+            connection.commit()
+            return int(cursor.rowcount)
 
     def recent_jobs(self, limit: int = 20) -> list[sqlite3.Row]:
         with self.connect() as connection:

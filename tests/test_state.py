@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import stat
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from resume_pilot.models import ApplicationAction, JobCard, LlmJobDecision, LlmJobDecisionValue
-from resume_pilot.state import BudgetExceededError, DuplicateActionError, StateStore
+from resume_pilot.state import (
+    RESERVATION_TTL_SECONDS,
+    BudgetExceededError,
+    DuplicateActionError,
+    StateStore,
+)
 
 
 def make_job(platform_job_id: str = "job-1") -> JobCard:
@@ -164,18 +169,45 @@ def test_reserve_contact_enforces_cap_atomically_and_can_release(tmp_path):
 def test_orphan_reservation_is_not_a_contact_and_is_recoverable(tmp_path):
     store = StateStore(tmp_path / "state.sqlite")
     job_id, _ = store.upsert_job(make_job())
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
 
-    store.reserve_contact(job_id, daily_cap=5)
-    # A bare reservation (process killed before confirm) is not a completed contact,
-    # so a later run must not skip the job as already contacted.
+    store.reserve_contact(job_id, daily_cap=5, when=old)
+    # A bare reservation (process killed before confirm) is not a completed contact.
     assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
-
-    # The stale reservation must not block a retry on the next run.
-    store.reserve_contact(job_id, daily_cap=5)
+    # A still-active reservation blocks a concurrent duplicate.
+    with pytest.raises(DuplicateActionError):
+        store.reserve_contact(job_id, daily_cap=5, when=old)
+    # Once it is stale (older than the TTL), a later run recovers and retries it.
+    store.reserve_contact(job_id, daily_cap=5, when=later)
     assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
-
     # Confirming turns it into a real contact that blocks duplicates.
     store.confirm_contact(job_id, details={"job_id": "job-1"})
     assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
     with pytest.raises(DuplicateActionError):
-        store.reserve_contact(job_id, daily_cap=5)
+        store.reserve_contact(job_id, daily_cap=5, when=later)
+
+
+def test_stale_reservation_does_not_consume_daily_cap(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_a, _ = store.upsert_job(make_job("job-a"))
+    job_b, _ = store.upsert_job(make_job("job-b"))
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_a, daily_cap=1, when=old)
+    # Job A's reservation goes stale; with cap=1 it must not block job B's contact.
+    assert store.can_record_contact(daily_cap=1, when=later) is True
+    store.reserve_contact(job_b, daily_cap=1, when=later)
+    store.confirm_contact(job_b, details={"job_id": "job-b"})
+    assert store.has_action(job_b, ApplicationAction.IMMEDIATE_CONTACT) is True
+
+
+def test_resolve_pauses_clears_active_pauses(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    store.pause("page_risk_on_search", details={"keyword": "k8s"})
+    store.pause("contact_click_needs_manual_verification", details={"job_id": "x"})
+
+    assert len(store.active_pauses()) == 2
+    assert store.resolve_pauses() == 2
+    assert store.active_pauses() == []

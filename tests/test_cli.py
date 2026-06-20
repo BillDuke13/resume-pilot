@@ -395,6 +395,24 @@ def test_live_contact_trial_failure_is_pre_click_abort():
     assert exc_info.value.reason == "contact_button_unclickable"
 
 
+def test_pauses_list_and_resolve(tmp_path, capsys):
+    from resume_pilot.state import StateStore
+
+    db = tmp_path / "state.sqlite"
+    StateStore(db).pause("page_risk_on_search", details={"keyword": "k8s"})
+
+    assert main(["--state-db", str(db), "pauses", "list"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert len(listed["active_pauses"]) == 1
+    assert listed["active_pauses"][0]["reason"] == "page_risk_on_search"
+
+    assert main(["--state-db", str(db), "pauses", "resolve"]) == 0
+    assert json.loads(capsys.readouterr().out)["resolved"] == 1
+
+    assert main(["--state-db", str(db), "pauses", "list"]) == 0
+    assert json.loads(capsys.readouterr().out)["active_pauses"] == []
+
+
 def test_live_contact_locator_failure_is_pre_click_abort():
     page = FakeContactPage(
         post_html="<div class='job-detail'>已进入会话</div>",

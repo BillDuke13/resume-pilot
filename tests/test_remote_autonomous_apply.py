@@ -922,7 +922,14 @@ def _arrange_cdp_contact(module, monkeypatch, detail_url, events):
     async def fake_sleep(_seconds):
         return None
 
+    page_text_reads = []
+
     async def fake_page_text(_target):
+        page_text_reads.append(1)
+        # First read is the pre-click baseline (contact button only, no success
+        # marker); later reads show the conversation marker that newly appears.
+        if len(page_text_reads) == 1:
+            return "Engineer role\n立即沟通"
         return "Engineer role\n继续沟通"
 
     async def fake_bring_to_front(*_args):
@@ -1147,3 +1154,62 @@ def test_cdp_contact_search_is_scoped_to_selected_detail_box(monkeypatch, tmp_pa
     assert ".job-detail-box" in source
     assert "scope.querySelectorAll" in source
     assert "document.querySelectorAll" not in source
+
+
+def test_cdp_dispatch_failure_distinguishes_pre_and_post_dispatch(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_page_text(_target):
+        return "Engineer role"
+
+    async def fake_cdp_evaluate(_web_socket_url, expression):
+        if expression == "window.location.href":
+            return detail_url
+        if expression == "window.__resumePilotClickEvents || []":
+            return []
+        return {
+            "ok": True,
+            "reason": "clickable_center_found",
+            "count": 1,
+            "redirect_url": "/web/geek/chat?id=ok",
+            "x": 1,
+            "y": 2,
+        }
+
+    async def fake_bring_to_front(*_args):
+        return None
+
+    def arrange(*, dispatched):
+        async def fake_dispatch(*_args, **_kwargs):
+            raise module.CdpClickError("socket dropped", dispatched=dispatched)
+
+        monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+        monkeypatch.setattr(module, "page_text", fake_page_text)
+        monkeypatch.setattr(module, "cdp_evaluate", fake_cdp_evaluate)
+        monkeypatch.setattr(module, "cdp_bring_to_front", fake_bring_to_front)
+        monkeypatch.setattr(module, "cdp_dispatch_mouse_click", fake_dispatch)
+
+    # No mouse event was sent -> pre-click abort that releases the reservation.
+    arrange(dispatched=False)
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(
+            module.click_immediate_contact(
+                target, platform_job_id="boss:example", detail_url=detail_url
+            )
+        )
+    assert not isinstance(exc_info.value, module.CdpClickError)
+    assert str(exc_info.value).startswith("contact_button_not_safe")
+
+    # A mouse event was sent -> the click may have landed -> propagate to confirm.
+    arrange(dispatched=True)
+    with pytest.raises(module.CdpClickError):
+        asyncio.run(
+            module.click_immediate_contact(
+                target, platform_job_id="boss:example", detail_url=detail_url
+            )
+        )
