@@ -765,3 +765,74 @@ def test_autonomous_post_click_failure_confirms_and_pauses(monkeypatch, tmp_path
         "contact_failed_after_possible_click" in p["details"]
         for p in module.store.active_pauses()
     )
+
+
+def test_main_pauses_when_managed_browser_not_running(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    opened = []
+
+    async def fail_open_html(url, *, settle_seconds):
+        opened.append(url)
+        raise AssertionError("must not open a page without a managed browser")
+
+    class FakeStatus:
+        running = False
+        detail = "CDP port is serving an unmanaged browser; refusing to use it"
+        cdp_url = "http://127.0.0.1:9222"
+
+    class FakeManager:
+        def __init__(self, _paths):
+            self.cdp_host = "127.0.0.1"
+            self.cdp_url = "http://127.0.0.1:9222"
+
+        def status(self):
+            return FakeStatus()
+
+    monkeypatch.setattr(
+        module.AutonomousPolicy,
+        "load",
+        classmethod(lambda _cls, _paths: make_policy(module, tmp_path)),
+    )
+    monkeypatch.setattr(module, "load_profile", lambda _policy: ("Policy.", ["Kubernetes"]))
+    monkeypatch.setattr(module, "BrowserManager", FakeManager)
+    monkeypatch.setattr(module, "open_html", fail_open_html)
+
+    rc = asyncio.run(module.main())
+
+    assert rc == 2
+    assert opened == []
+    assert any(
+        "managed_browser_not_running" in p["details"] for p in module.store.active_pauses()
+    )
+
+
+def test_main_refuses_non_loopback_cdp_host(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    opened = []
+
+    async def fail_open_html(url, *, settle_seconds):
+        opened.append(url)
+        raise AssertionError("must not open a page when the CDP host is non-loopback")
+
+    class FakeManager:
+        def __init__(self, _paths):
+            self.cdp_host = "0.0.0.0"
+            self.cdp_url = "http://0.0.0.0:9222"
+
+        def status(self):
+            raise AssertionError("status must not be probed once a non-loopback host is rejected")
+
+    monkeypatch.setattr(
+        module.AutonomousPolicy,
+        "load",
+        classmethod(lambda _cls, _paths: make_policy(module, tmp_path)),
+    )
+    monkeypatch.setattr(module, "load_profile", lambda _policy: ("Policy.", ["Kubernetes"]))
+    monkeypatch.setattr(module, "BrowserManager", FakeManager)
+    monkeypatch.setattr(module, "open_html", fail_open_html)
+
+    rc = asyncio.run(module.main())
+
+    assert rc == 2
+    assert opened == []
+    assert any("cdp_host_not_loopback" in p["details"] for p in module.store.active_pauses())

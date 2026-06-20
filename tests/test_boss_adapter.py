@@ -282,3 +282,78 @@ def test_card_prefers_job_detail_url_id_over_volatile_data_lid():
     )
 
     assert jobs[0].platform_job_id == "stable-id"
+
+
+def test_detail_card_prefers_panel_platform_job_id():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box" data-job-id="boss-real-123">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Platform Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs?query=k8s",
+    )
+
+    assert jobs[0].platform_job_id == "boss-real-123"
+
+
+def test_detail_card_uses_panel_job_detail_link_for_id():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <a class="job-detail-info" href="/job_detail/linked456.html">Engineer 30-50K</a>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs?query=k8s",
+    )
+
+    assert jobs[0].platform_job_id == "linked456"
+
+
+def test_detail_card_id_stable_across_different_search_urls():
+    adapter = BossHtmlAdapter()
+
+    def detail_html() -> str:
+        return """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Platform Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """
+
+    from_k8s = adapter.extract_job_cards(
+        detail_html(),
+        source_url="https://www.zhipin.com/web/geek/jobs?query=k8s",
+    )
+    from_sre = adapter.extract_job_cards(
+        detail_html(),
+        source_url="https://www.zhipin.com/web/geek/jobs?query=sre",
+    )
+
+    # The same posting opened from two different search keywords must dedupe to one id,
+    # so the duplicate-contact guard cannot be bypassed by reopening from another query.
+    assert from_k8s[0].platform_job_id == from_sre[0].platform_job_id

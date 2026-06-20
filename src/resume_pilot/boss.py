@@ -75,6 +75,24 @@ def _stable_job_id(*parts: str | None) -> str:
     return f"derived-{digest[:16]}"
 
 
+def _selected_detail_job_id(panel: Tag) -> str | None:
+    """Return the platform job id carried by a selected detail panel, if any.
+
+    Scoped to the panel so sibling recommendation links cannot leak their ids in.
+    Prefers explicit platform id attributes, then a /job_detail/ link inside it.
+    """
+    for element in (panel, *panel.find_all(True)):
+        for attr in ("data-job-id", "data-jobid", "data-lid"):
+            value = element.get(attr)
+            if value:
+                return str(value)
+    for anchor in panel.find_all("a", href=True):
+        job_id = _detail_url_job_id(str(anchor["href"]))
+        if job_id:
+            return job_id
+    return None
+
+
 def _split_title_salary(text: str) -> tuple[str, str | None]:
     match = re.search(r"\s+(\d{1,3}(?:-\d{1,3})?K(?:·\d{1,2}薪)?)\s*$", text, re.IGNORECASE)
     if match:
@@ -179,8 +197,11 @@ class BossHtmlAdapter:
             or "Unknown company"
         )
         location = _first_text(detail, (".location", ".job-area", ".company-location"))
-        platform_job_id = _detail_url_job_id(source_url) or _stable_job_id(
-            title, company, source_url
+        detail_box = soup.select_one(".job-detail-box") or detail
+        platform_job_id = (
+            _selected_detail_job_id(detail_box)
+            or _detail_url_job_id(source_url)
+            or _stable_job_id(title, company)
         )
         return JobCard(
             platform_job_id=platform_job_id,

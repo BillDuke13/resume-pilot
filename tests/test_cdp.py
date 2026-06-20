@@ -68,6 +68,16 @@ def test_target_url_matches_expected_host_path_and_query():
     assert cdp.target_url_matches(expected, actual, "zhipin.com")
 
 
+def test_target_url_rejects_scheme_downgrade():
+    # Same host/path/query but http instead of the expected https must not match,
+    # so a downgraded or redirected page cannot pass the HTTPS gate at click time.
+    assert not cdp.target_url_matches(
+        "https://www.zhipin.com/web/geek/jobs?query=k8s",
+        "http://www.zhipin.com/web/geek/jobs?query=k8s",
+        "zhipin.com",
+    )
+
+
 def test_target_url_rejects_file_urls():
     assert not cdp.target_url_matches(
         "https://www.zhipin.com/job_detail/one.html",

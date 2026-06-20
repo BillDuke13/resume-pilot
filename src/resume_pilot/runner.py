@@ -62,7 +62,7 @@ class ContactExecutor(Protocol):
     def __call__(self, job: JobCard) -> dict[str, Any]: ...
 
 
-_UNTRUSTED_MARKER_RE = re.compile(r"</?\s*untrusted_job_posting\s*>", re.IGNORECASE)
+_UNTRUSTED_MARKER_RE = re.compile(r"</?\s*untrusted_job_posting\b[^>]*>", re.IGNORECASE)
 
 
 def _strip_untrusted_markers(value: str) -> str:
@@ -358,7 +358,10 @@ class ResumePilotRunner:
                     "contact_click_needs_manual_verification",
                     details=click_details,
                 )
-                summary = _replace_summary(summary, paused=summary.paused + 1)
+                raise HumanPauseRequired(
+                    "contact_click_needs_manual_verification",
+                    click_details,
+                )
         return summary
 
     def evaluate_html_file(

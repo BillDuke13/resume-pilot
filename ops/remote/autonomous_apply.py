@@ -19,6 +19,7 @@ from resume_pilot.boss import (
     BossHtmlAdapter,
     normalize_text,
 )
+from resume_pilot.browser import LOOPBACK_CDP_HOSTS, BrowserManager
 from resume_pilot.cdp import (
     CdpError,
     cdp_bring_to_front,
@@ -980,6 +981,18 @@ async def main() -> int:
     if current >= policy.daily_cap:
         emit("cap_reached", today=current, daily_cap=policy.daily_cap)
         return 0
+    manager = BrowserManager(paths)
+    if manager.cdp_host not in LOOPBACK_CDP_HOSTS:
+        pause("cdp_host_not_loopback", cdp_url=manager.cdp_url, cdp_host=manager.cdp_host)
+        return 2
+    browser_status = manager.status()
+    if not browser_status.running:
+        pause(
+            "managed_browser_not_running",
+            detail=browser_status.detail,
+            cdp_url=browser_status.cdp_url,
+        )
+        return 2
     seen: set[str] = set()
     for keyword in keywords:
         url = search_url(keyword, policy)

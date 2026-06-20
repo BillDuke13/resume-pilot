@@ -73,6 +73,8 @@ def target_url_matches(expected_url: str, actual_url: str, url_contains: str) ->
 
     expected = urllib.parse.urlparse(expected_url)
     actual = urllib.parse.urlparse(actual_url)
+    if expected.scheme and actual.scheme != expected.scheme:
+        return False
     if expected.netloc and actual.netloc != expected.netloc:
         return False
     if expected.path and expected.path != "/" and actual.path != expected.path:
