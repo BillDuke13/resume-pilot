@@ -63,6 +63,13 @@ def _job_id_from_url(url: str | None) -> str | None:
     return None
 
 
+def _detail_url_job_id(url: str | None) -> str | None:
+    if not url:
+        return None
+    match = re.search(r"/job_detail/([A-Za-z0-9_-]+)(?:\.html)?", url)
+    return match.group(1) if match else None
+
+
 def _stable_job_id(*parts: str | None) -> str:
     digest = hashlib.sha256("|".join(part or "" for part in parts).encode()).hexdigest()
     return f"derived-{digest[:16]}"
@@ -90,7 +97,7 @@ def _candidate_card(anchor: Tag) -> Tag:
     for parent in anchor.parents:
         if not isinstance(parent, Tag):
             continue
-        if _class_contains(parent, "job-card", "job-primary", "job-list", "job-item"):
+        if _class_contains(parent, "job-card", "job-primary", "job-item"):
             return parent
         if parent.name in {"li", "article"}:
             return parent
@@ -171,7 +178,9 @@ class BossHtmlAdapter:
             or "Unknown company"
         )
         location = _first_text(detail, (".location", ".job-area", ".company-location"))
-        platform_job_id = _stable_job_id(title, company, source_url)
+        platform_job_id = _detail_url_job_id(source_url) or _stable_job_id(
+            title, company, source_url
+        )
         return JobCard(
             platform_job_id=platform_job_id,
             title=title,

@@ -50,3 +50,34 @@ def test_stop_signals_managed_browser(tmp_path, monkeypatch):
 
     assert killed == [(4242, signal.SIGTERM)]
     assert not paths.browser_pid.exists()
+
+
+def test_status_rejects_unmanaged_cdp_browser(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    manager = BrowserManager(paths)
+
+    monkeypatch.setattr(
+        "resume_pilot.browser.fetch_cdp_version", lambda *_a, **_k: {"Browser": "Chrome/1"}
+    )
+    monkeypatch.setattr(BrowserManager, "_pid_is_managed_browser", lambda _self, _pid: False)
+
+    status = manager.status()
+
+    assert status.running is False
+    assert "unmanaged" in (status.detail or "")
+
+
+def test_status_accepts_managed_cdp_browser(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    paths.browser_pid.write_text("4242", encoding="utf-8")
+    manager = BrowserManager(paths)
+
+    monkeypatch.setattr(
+        "resume_pilot.browser.fetch_cdp_version",
+        lambda *_a, **_k: {"Browser": "Chrome/1", "webSocketDebuggerUrl": "ws://x"},
+    )
+    monkeypatch.setattr(BrowserManager, "_pid_is_managed_browser", lambda _self, _pid: True)
+
+    status = manager.status()
+
+    assert status.running is True

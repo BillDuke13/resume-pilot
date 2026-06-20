@@ -119,3 +119,42 @@ def store_action_immediate_contact():
     from resume_pilot.models import ApplicationAction
 
     return ApplicationAction.IMMEDIATE_CONTACT
+
+
+def test_dry_run_action_does_not_block_a_later_real_contact(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+
+    store.record_contact(job_id, daily_cap=1, dry_run=True, when=now)
+    store.record_contact(job_id, daily_cap=1, when=now)
+
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+    assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT, when=now) == 1
+
+
+def test_record_job_decision_does_not_downgrade_contacted_job(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    store.record_contact(job_id, daily_cap=1)
+    assert store.get_job(job_id)["status"] == "awaiting_reply"
+
+    store.record_job_decision(job_id, make_decision(LlmJobDecisionValue.SKIP))
+
+    assert store.get_job(job_id)["status"] == "awaiting_reply"
+
+
+def test_reserve_contact_enforces_cap_atomically_and_can_release(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    second_id, _ = store.upsert_job(make_job("job-2"))
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+
+    store.reserve_contact(job_id, daily_cap=1, when=now)
+    with pytest.raises(BudgetExceededError):
+        store.reserve_contact(second_id, daily_cap=1, when=now)
+
+    store.release_contact(job_id)
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+    store.reserve_contact(second_id, daily_cap=1, when=now)
+    assert store.has_action(second_id, ApplicationAction.IMMEDIATE_CONTACT) is True

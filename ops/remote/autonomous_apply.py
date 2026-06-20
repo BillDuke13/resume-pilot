@@ -34,7 +34,7 @@ from resume_pilot.config import DEFAULT_DAILY_CAP, AppPaths, default_cdp_url
 from resume_pilot.llm import ClaudeCodeClient, InvalidLlmResponseError, LlmError, parse_job_decision
 from resume_pilot.models import ApplicationAction, JobCard, LlmJobDecision, LlmJobDecisionValue
 from resume_pilot.runner import build_job_decision_prompt, parse_monthly_salary_range_k
-from resume_pilot.state import StateStore
+from resume_pilot.state import BudgetExceededError, DuplicateActionError, StateStore
 
 POLICY_ENV = "RESUME_PILOT_AUTONOMOUS_POLICY"
 SUCCESS_MARKERS = ("发送简历", "继续沟通", "沟通中", "聊天", "常用语")
@@ -375,10 +375,17 @@ def sanitize_decision(
     return decision
 
 
+def _match_detail_card(cards: list[JobCard], detail_url: str) -> JobCard | None:
+    for card in cards:
+        if card.detail_url and detail_url and card.detail_url == detail_url:
+            return card
+    return None
+
+
 def merge_detail_job(list_job: JobCard, detail_html: str, detail_url: str) -> JobCard:
     text = html_to_text(detail_html)
     extracted = adapter.extract_job_cards(detail_html, source_url=detail_url)
-    detail = extracted[0] if extracted else None
+    detail = _match_detail_card(extracted, detail_url)
     return JobCard(
         platform_job_id=list_job.platform_job_id,
         title=list_job.title or (detail.title if detail else "Unknown role"),
@@ -857,6 +864,23 @@ async def process_job(
         pause("active_contact_attempt_exists", title=job.title, url=job.detail_url)
         return False
 
+    try:
+        store.reserve_contact(
+            job_id,
+            daily_cap=policy.daily_cap,
+            details={"job_id": job.platform_job_id, "url": job.detail_url},
+        )
+    except DuplicateActionError:
+        emit("skip", title=job.title, salary=job.salary, reason="already_contacted")
+        return True
+    except BudgetExceededError:
+        emit(
+            "cap_reached",
+            today=store.action_count(ApplicationAction.IMMEDIATE_CONTACT),
+            daily_cap=policy.daily_cap,
+        )
+        return False
+
     attempt_id = store.start_action_attempt(
         job_id,
         ApplicationAction.IMMEDIATE_CONTACT,
@@ -869,6 +893,7 @@ async def process_job(
             job.detail_url or "",
         )
     except Exception as exc:
+        store.release_contact(job_id)
         store.finish_action_attempt(
             attempt_id,
             status="failed",
@@ -889,7 +914,7 @@ async def process_job(
 
     details = {**details, "attempt_id": attempt_id}
     store.finish_action_attempt(attempt_id, status="clicked", details=details)
-    store.record_contact(job_id, daily_cap=policy.daily_cap, dry_run=False, details=details)
+    store.confirm_contact(job_id, details=details)
     store.finish_action_attempt(attempt_id, status="recorded", details=details)
     if details.get("needs_manual_verification"):
         pause(

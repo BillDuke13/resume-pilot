@@ -74,6 +74,14 @@ class BrowserManager:
         version = fetch_cdp_version(self.cdp_url)
         pid = self._read_pid()
         if version:
+            if pid is None or not self._pid_is_managed_browser(pid):
+                return BrowserStatus(
+                    running=False,
+                    cdp_url=self.cdp_url,
+                    pid=pid,
+                    browser=version.get("Browser"),
+                    detail="CDP port is serving an unmanaged browser; refusing to use it",
+                )
             return BrowserStatus(
                 running=True,
                 cdp_url=self.cdp_url,
@@ -88,6 +96,12 @@ class BrowserManager:
         current = self.status()
         if current.running:
             return current
+        if fetch_cdp_version(self.cdp_url) is not None:
+            return BrowserStatus(
+                running=False,
+                cdp_url=self.cdp_url,
+                detail="CDP port is occupied by an unmanaged browser; not starting a new one",
+            )
 
         binary = find_browser_binary()
         if not binary:

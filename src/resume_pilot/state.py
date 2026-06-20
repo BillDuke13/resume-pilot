@@ -99,9 +99,12 @@ class StateStore:
                     action_date TEXT NOT NULL,
                     dry_run INTEGER NOT NULL DEFAULT 0,
                     details TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(job_id, action)
+                    created_at TEXT NOT NULL
                 );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_application_actions_real_unique
+                    ON application_actions(job_id, action)
+                    WHERE dry_run = 0;
 
                 CREATE TABLE IF NOT EXISTS action_attempts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,10 +242,16 @@ class StateStore:
                     now,
                 ),
             )
-            connection.execute(
-                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (status.value, now, job_id),
-            )
+            current = connection.execute(
+                "SELECT status FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            protected = (JobStatus.AWAITING_REPLY.value, JobStatus.RESUME_SENT.value)
+            if current is None or current["status"] not in protected:
+                connection.execute(
+                    "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                    (status.value, now, job_id),
+                )
             connection.commit()
 
     def action_count(
@@ -270,7 +279,7 @@ class StateStore:
                 """
                 SELECT 1
                 FROM application_actions
-                WHERE job_id = ? AND action = ?
+                WHERE job_id = ? AND action = ? AND dry_run = 0
                 LIMIT 1
                 """,
                 (job_id, action.value),
@@ -375,6 +384,110 @@ class StateStore:
         if not dry_run:
             self._upsert_reply_queue(job_id, status=JobStatus.AWAITING_REPLY.value)
 
+    def reserve_contact(
+        self,
+        job_id: int,
+        *,
+        daily_cap: int = DEFAULT_DAILY_CAP,
+        when: datetime | None = None,
+        timezone: str = DEFAULT_TIMEZONE,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Atomically claim today's contact budget before any real click.
+
+        Inserts the immediate-contact row inside one IMMEDIATE transaction that
+        also enforces the daily cap and duplicate guard, so two concurrent runners
+        cannot both pass a read-only cap check and then both click. The job status
+        and reply queue are advanced only by confirm_contact() after the click
+        succeeds; release_contact() removes the reservation if the click fails.
+        """
+        timestamp = when or utc_now()
+        day = action_date(timestamp, timezone)
+        now = isoformat_utc(timestamp)
+        payload = {**(details or {}), "reserved": True}
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id FROM application_actions
+                WHERE job_id = ? AND action = ? AND dry_run = 0
+                """,
+                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value),
+            ).fetchone()
+            if existing:
+                raise DuplicateActionError(
+                    f"immediate_contact already recorded for job {job_id}"
+                )
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM application_actions
+                WHERE action = ? AND action_date = ? AND dry_run = 0
+                """,
+                (ApplicationAction.IMMEDIATE_CONTACT.value, day),
+            ).fetchone()
+            if int(row["count"]) >= daily_cap:
+                raise BudgetExceededError(
+                    f"Daily cap {daily_cap} reached for immediate_contact on {day}"
+                )
+            connection.execute(
+                """
+                INSERT INTO application_actions (
+                    job_id, action, action_date, dry_run, details, created_at
+                )
+                VALUES (?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    job_id,
+                    ApplicationAction.IMMEDIATE_CONTACT.value,
+                    day,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            )
+            connection.commit()
+
+    def confirm_contact(
+        self,
+        job_id: int,
+        *,
+        when: datetime | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Finalize a reserved contact after a successful click."""
+        now = isoformat_utc(when)
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE application_actions
+                SET details = ?
+                WHERE job_id = ? AND action = ? AND dry_run = 0
+                """,
+                (
+                    json.dumps(details or {}, ensure_ascii=False, sort_keys=True),
+                    job_id,
+                    ApplicationAction.IMMEDIATE_CONTACT.value,
+                ),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (JobStatus.AWAITING_REPLY.value, now, job_id),
+            )
+            connection.commit()
+        self._upsert_reply_queue(job_id, status=JobStatus.AWAITING_REPLY.value)
+
+    def release_contact(self, job_id: int) -> None:
+        """Release a contact reservation when the click did not happen."""
+        with self.connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM application_actions
+                WHERE job_id = ? AND action = ? AND dry_run = 0
+                """,
+                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value),
+            )
+            connection.commit()
+
     def record_resume_sent(
         self,
         job_id: int,
@@ -414,11 +527,11 @@ class StateStore:
             existing = connection.execute(
                 """
                 SELECT id FROM application_actions
-                WHERE job_id = ? AND action = ?
+                WHERE job_id = ? AND action = ? AND dry_run = 0
                 """,
                 (job_id, action.value),
             ).fetchone()
-            if existing:
+            if existing and not dry_run:
                 raise DuplicateActionError(f"{action.value} already recorded for job {job_id}")
 
             if not dry_run and daily_cap is not None:

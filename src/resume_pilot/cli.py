@@ -255,7 +255,9 @@ def cmd_browser(args: argparse.Namespace) -> int:
     command = args.browser_command
     status = getattr(manager, command)()
     _print_json(status.__dict__)
-    return 0 if status.running or command == "stop" else 1
+    if command == "stop":
+        return 0 if not status.running else 1
+    return 0 if status.running else 1
 
 
 def cmd_profile_extract(args: argparse.Namespace) -> int:

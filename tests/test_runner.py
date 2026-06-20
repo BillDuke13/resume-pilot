@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from resume_pilot.boss import BossHtmlAdapter, HumanPauseRequired
-from resume_pilot.models import JobCard, LlmJobDecision, LlmJobDecisionValue
+from resume_pilot.models import ApplicationAction, JobCard, LlmJobDecision, LlmJobDecisionValue
 from resume_pilot.runner import (
     MAX_JOB_PROMPT_TEXT_CHARS,
     ResumePilotRunner,
@@ -342,3 +342,35 @@ def test_execute_requires_safe_apply_decision_before_click(tmp_path):
 
     assert str(exc_info.value) == "apply_decision_not_safe"
     assert clicked == []
+
+
+def test_failed_click_releases_reserved_contact_budget(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    runner = ResumePilotRunner(
+        state=store,
+        llm_client=FakeLlmClient(),
+        adapter=BossHtmlAdapter(),
+    )
+
+    def failing_executor(_job):
+        raise RuntimeError("click crashed")
+
+    with pytest.raises(RuntimeError):
+        runner.evaluate_static_html(
+            """
+            <li class="job-card-wrapper" data-job-id="one">
+              <a class="job-name" href="/job_detail/one.html">Automation Engineer</a>
+              <span class="salary">35-45K</span>
+              <span class="company-name">Example</span>
+              <button>立即沟通</button>
+            </li>
+            """,
+            source_url="https://www.zhipin.com/web/geek/job",
+            dry_run=False,
+            daily_cap=1,
+            contact_executor=failing_executor,
+        )
+
+    job = store.get_job_by_platform_id("one")
+    assert store.has_action(job["id"], ApplicationAction.IMMEDIATE_CONTACT) is False
+    assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT) == 0

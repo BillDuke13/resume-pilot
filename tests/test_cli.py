@@ -82,3 +82,20 @@ def test_live_execute_rejects_decision_fixture(tmp_path, capsys):
 
     assert exit_code == 2
     assert "--decision-fixture" in capsys.readouterr().err
+
+
+def test_browser_stop_returns_nonzero_when_browser_survives(tmp_path, monkeypatch):
+    from resume_pilot.browser import BrowserManager, BrowserStatus
+
+    def fake_stop(_self):
+        return BrowserStatus(
+            running=True,
+            cdp_url="http://127.0.0.1:9222",
+            detail="Browser did not stop after SIGTERM",
+        )
+
+    monkeypatch.setattr(BrowserManager, "stop", fake_stop)
+
+    exit_code = main(["--state-db", str(tmp_path / "state.sqlite"), "browser", "stop"])
+
+    assert exit_code == 1

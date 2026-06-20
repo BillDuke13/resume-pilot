@@ -15,7 +15,7 @@ from resume_pilot.models import (
     LlmJobDecisionValue,
     RunSummary,
 )
-from resume_pilot.state import StateStore
+from resume_pilot.state import BudgetExceededError, DuplicateActionError, StateStore
 
 MIN_APPLY_CONFIDENCE = 0.75
 MAX_JOB_PROMPT_TEXT_CHARS = 6000
@@ -226,6 +226,32 @@ class ResumePilotRunner:
                 )
                 raise HumanPauseRequired("contact_button_not_safe", {"risks": click_risks})
 
+            try:
+                self.state.reserve_contact(
+                    job_id,
+                    daily_cap=daily_cap,
+                    timezone=self.timezone,
+                    details={"job_id": job.platform_job_id, "source_url": source_url},
+                )
+            except DuplicateActionError:
+                self.state.pause(
+                    "duplicate_contact_action",
+                    details={"job_id": job.platform_job_id},
+                )
+                raise HumanPauseRequired(
+                    "duplicate_contact_action",
+                    {"job_id": job.platform_job_id},
+                ) from None
+            except BudgetExceededError:
+                self.state.pause(
+                    "daily_contact_cap_reached",
+                    details={"daily_cap": daily_cap, "job_id": job.platform_job_id},
+                )
+                raise HumanPauseRequired(
+                    "daily_contact_cap_reached",
+                    {"daily_cap": daily_cap, "job_id": job.platform_job_id},
+                ) from None
+
             attempt_id = self.state.start_action_attempt(
                 job_id,
                 ApplicationAction.IMMEDIATE_CONTACT,
@@ -234,6 +260,7 @@ class ResumePilotRunner:
             try:
                 details = contact_executor(job)
             except Exception as exc:
+                self.state.release_contact(job_id)
                 self.state.finish_action_attempt(
                     attempt_id,
                     status="failed",
@@ -247,11 +274,8 @@ class ResumePilotRunner:
                 status="clicked",
                 details=click_details,
             )
-            self.state.record_contact(
+            self.state.confirm_contact(
                 job_id,
-                daily_cap=daily_cap,
-                dry_run=False,
-                timezone=self.timezone,
                 details=click_details,
             )
             self.state.finish_action_attempt(

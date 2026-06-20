@@ -197,3 +197,44 @@ def test_detail_card_job_id_is_stable_across_volatile_page_text():
     )
 
     assert first[0].platform_job_id == second[0].platform_job_id
+
+
+def test_list_container_does_not_bleed_details_across_cards():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-list">
+          <a class="job-name" href="/job_detail/aaa.html">First Role 30-40K</a>
+          <a class="job-name" href="/job_detail/bbb.html">Second Role</a>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs",
+    )
+
+    by_id = {job.platform_job_id: job for job in jobs}
+    assert set(by_id) == {"aaa", "bbb"}
+    assert by_id["aaa"].salary == "30-40K"
+    assert by_id["bbb"].salary is None
+
+
+def test_detail_card_uses_job_detail_url_id_for_dedupe():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Platform Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/xyz789.html",
+    )
+
+    assert jobs[0].platform_job_id == "xyz789"

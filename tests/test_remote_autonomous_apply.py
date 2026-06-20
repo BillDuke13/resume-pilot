@@ -547,3 +547,28 @@ def test_unverified_cdp_click_does_not_navigate_redirect_url(monkeypatch, tmp_pa
     assert navigate_calls == []
     assert details["fallback_navigation_used"] is False
     assert details["needs_manual_verification"] is True
+
+
+def test_merge_detail_job_ignores_unrelated_recommendation_salary(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    list_job = module.JobCard(
+        platform_job_id="boss:main",
+        title="Platform Engineer",
+        company="Example",
+        source_url="https://www.zhipin.com/web/geek/jobs",
+        detail_url="https://www.zhipin.com/job_detail/main.html",
+        salary="40-55K",
+        location="Sample City",
+        raw_text="main role",
+    )
+    detail_html = """
+    <li class="job-card-wrapper" data-job-id="reco">
+      <a class="job-name" href="/job_detail/reco.html">Recommended Role</a>
+      <span class="salary">8-10K</span>
+      <span class="company-name">Other Co</span>
+    </li>
+    """
+
+    merged = module.merge_detail_job(list_job, detail_html, list_job.detail_url)
+
+    assert merged.salary == "40-55K"
