@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def load_remote_module(monkeypatch, tmp_path):
     monkeypatch.setenv("RESUME_PILOT_STATE_DB", str(tmp_path / "state.sqlite"))
@@ -992,3 +994,119 @@ def test_compact_profile_includes_risk_flags_to_watch(monkeypatch, tmp_path):
 
     # The candidate-specific risk conditions must reach the compacted LLM profile.
     assert compacted["risk_flags_to_watch"] == ["unverified compensation", "vague equity"]
+
+
+def test_cdp_precheck_failure_is_pre_click_abort(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+
+    async def fake_cdp_evaluate(_web_socket_url, expression):
+        if expression == "window.location.href":
+            return detail_url
+        return {}
+
+    async def fake_page_text(_target):
+        raise RuntimeError("CDP target detached")
+
+    monkeypatch.setattr(module, "cdp_evaluate", fake_cdp_evaluate)
+    monkeypatch.setattr(module, "page_text", fake_page_text)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(
+            module.click_immediate_contact(
+                target, platform_job_id="boss:example", detail_url=detail_url
+            )
+        )
+
+    # A stale CDP read before the click must be tagged as a pre-click abort so
+    # process_job releases the reservation instead of confirming a phantom contact.
+    assert str(exc_info.value).startswith(module.PRE_CLICK_ABORT_PREFIXES)
+
+
+def test_playwright_fallback_preserves_already_in_conversation(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_page_text(_target):
+        return "Senior platform engineer\n立即沟通"
+
+    async def fake_cdp_evaluate(_web_socket_url, expression):
+        if expression == "window.location.href":
+            return detail_url
+        if expression == "window.__resumePilotClickEvents || []":
+            return []
+        return {
+            "ok": True,
+            "reason": "clickable_center_found",
+            "count": 1,
+            "redirect_url": "/web/geek/chat?id=ok",
+            "x": 1,
+            "y": 2,
+        }
+
+    async def fake_bring_to_front(*_args):
+        return None
+
+    async def fake_click(*_args, **_kwargs):
+        return None
+
+    async def fake_playwright_click(_url):
+        return {
+            "ok": True,
+            "reason": "already_in_conversation",
+            "clicked_label": "继续沟通",
+            "post_click_verified": True,
+            "post_click_risks": [],
+        }
+
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(module, "page_text", fake_page_text)
+    monkeypatch.setattr(module, "cdp_evaluate", fake_cdp_evaluate)
+    monkeypatch.setattr(module, "cdp_bring_to_front", fake_bring_to_front)
+    monkeypatch.setattr(module, "cdp_dispatch_mouse_click", fake_click)
+    monkeypatch.setattr(module, "playwright_click_immediate_contact", fake_playwright_click)
+
+    details = asyncio.run(
+        module.click_immediate_contact(
+            target, platform_job_id="boss:example", detail_url=detail_url
+        )
+    )
+
+    # The fallback detected an existing conversation; that signal must survive so
+    # process_job releases the reserved budget instead of recording a new contact.
+    assert details["already_in_conversation"] is True
+
+
+def test_prior_llm_timeout_does_not_permanently_skip(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    job = make_job(module)
+    job_id, _ = module.store.upsert_job(job)
+    module.record_skip(job_id, "llm_decision_timeout", confidence=0.0)
+
+    contacted = []
+
+    async def fake_click(*_args, **_kwargs):
+        contacted.append(True)
+        return {
+            "clicked_label": "立即沟通",
+            "post_click_verified": True,
+            "needs_manual_verification": False,
+        }
+
+    monkeypatch.setattr(module, "client", _apply_client(module))
+    monkeypatch.setattr(module, "open_html", _detail_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(job, policy=make_policy(module, tmp_path), profile_summary="Policy.")
+    )
+
+    # A single prior timeout must not exclude the job forever; it is re-evaluated
+    # and contacted on a later run.
+    assert contacted == [True]
+    assert keep_going is True

@@ -515,11 +515,20 @@ def _click_unique_live_contact(
     # Match the same control shapes the adapter accepts in button_labels()
     # (anchors, buttons, and role="button" elements); a single comma selector
     # de-duplicates via querySelectorAll so an element is never counted twice.
-    locator = page.locator("a, button, [role=button]", has_text=pattern)
-    for index in range(locator.count()):
-        item = locator.nth(index)
-        if item.is_visible(timeout=1_000):
-            visible_buttons.append(item)
+    try:
+        locator = page.locator("a, button, [role=button]", has_text=pattern)
+        for index in range(locator.count()):
+            item = locator.nth(index)
+            if item.is_visible(timeout=1_000):
+                visible_buttons.append(item)
+    except Exception as exc:
+        # Locating and visibility checks run before any mouse event, so a detached
+        # page or lost session here means no click occurred — a pre-click abort
+        # that releases the reservation instead of burning the cap/dedupe slot.
+        raise HumanPauseRequired(
+            "contact_locator_unavailable",
+            {"job_id": platform_job_id, "error": str(exc)},
+        ) from exc
 
     if len(visible_buttons) != 1:
         raise HumanPauseRequired(
@@ -528,17 +537,11 @@ def _click_unique_live_contact(
         )
 
     before_url = page.url
-    try:
-        visible_buttons[0].click(timeout=10_000)
-    except Exception as exc:
-        # Playwright runs actionability checks before dispatching the click, so a
-        # failure here means no mouse event was sent. Surface it as a pre-click
-        # abort (release the reservation) instead of a post-click failure that
-        # would consume the daily cap and dedupe slot.
-        raise HumanPauseRequired(
-            "contact_button_unclickable",
-            {"job_id": platform_job_id, "error": str(exc)},
-        ) from exc
+    # A click can raise after the mouse event has already been dispatched (for
+    # example while waiting for a navigation it triggered). Let that exception
+    # propagate so the runner confirms a possible contact rather than releasing
+    # and risking a duplicate message to the same recruiter on retry.
+    visible_buttons[0].click(timeout=10_000)
     page.wait_for_timeout(1_500)
     post_click_html = _wait_for_live_page_html(page)
     post_click_risks = adapter.page_risks(post_click_html)

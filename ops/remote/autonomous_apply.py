@@ -545,28 +545,47 @@ async def playwright_click_immediate_contact(detail_url: str) -> dict[str, Any]:
         await playwright.stop()
 
 
+async def _precheck(awaitable: Any) -> Any:
+    """Await a pre-click CDP operation, tagging infra failures as pre-click aborts.
+
+    A stale or disconnected CDP target can fail these reads before any mouse event
+    is dispatched. Tagging the error with a PRE_CLICK_ABORT_PREFIXES prefix lets
+    process_job release the reservation instead of confirming a contact that never
+    happened.
+    """
+    try:
+        return await awaitable
+    except Exception as exc:
+        message = str(exc)
+        if message.startswith(PRE_CLICK_ABORT_PREFIXES):
+            raise
+        raise RuntimeError(f"contact_button_not_safe:precheck:{message}") from exc
+
+
 async def click_immediate_contact(
     target: Any,
     platform_job_id: str,
     detail_url: str,
 ) -> dict[str, Any]:
     current_url = str(
-        await cdp_evaluate(target.web_socket_debugger_url, "window.location.href") or ""
+        await _precheck(cdp_evaluate(target.web_socket_debugger_url, "window.location.href"))
+        or ""
     )
     if detail_url and not target_url_matches(detail_url, current_url, "zhipin.com"):
-        await cdp_navigate(target.web_socket_debugger_url, detail_url)
+        await _precheck(cdp_navigate(target.web_socket_debugger_url, detail_url))
         await asyncio.sleep(3.0)
         post_nav_url = str(
-            await cdp_evaluate(target.web_socket_debugger_url, "window.location.href") or ""
+            await _precheck(cdp_evaluate(target.web_socket_debugger_url, "window.location.href"))
+            or ""
         )
         if not target_url_matches(detail_url, post_nav_url, "zhipin.com"):
             raise RuntimeError(f"contact_button_not_safe:navigation_drift:{post_nav_url}")
 
-    before_text = await page_text(target)
+    before_text = await _precheck(page_text(target))
     risks = visible_page_risk_payload(before_text)
     if risks:
         raise RuntimeError(f"page_risk_before_click:{risks}")
-    await cdp_bring_to_front(target.web_socket_debugger_url)
+    await _precheck(cdp_bring_to_front(target.web_socket_debugger_url))
     await asyncio.sleep(0.25)
     js = r"""
     (() => {
@@ -651,7 +670,7 @@ async def click_immediate_contact(
       };
     })()
     """
-    result = await cdp_evaluate(target.web_socket_debugger_url, js)
+    result = await _precheck(cdp_evaluate(target.web_socket_debugger_url, js))
     if not isinstance(result, dict) or not result.get("ok"):
         if (
             isinstance(result, dict)
@@ -738,6 +757,8 @@ async def click_immediate_contact(
                 "clicked_label": str(playwright_details.get("clicked_label") or "立即沟通"),
                 "job_id": platform_job_id,
                 "before_url": detail_url,
+                "already_in_conversation": playwright_details.get("reason")
+                == "already_in_conversation",
                 "click_events": click_events[-8:],
                 "fallback_navigation_used": False,
                 "post_click_verified": True,
@@ -810,10 +831,6 @@ async def process_job(
     job = merge_detail_job(list_job, detail_html, list_job.detail_url)
     job_id, inserted = store.upsert_job(job)
     emit("detail", title=job.title, salary=job.salary, url=job.detail_url, inserted=inserted)
-
-    if latest_job_decision_reason(job_id) == "llm_decision_timeout":
-        emit("skip", title=job.title, salary=job.salary, reason="previous_llm_decision_timeout")
-        return True
 
     if store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT):
         emit("skip", title=job.title, salary=job.salary, reason="already_contacted")

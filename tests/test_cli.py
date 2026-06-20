@@ -258,10 +258,13 @@ class _FakeButton:
 
 
 class _FakeSelectorLocator:
-    def __init__(self, items):
+    def __init__(self, items, *, count_error: Exception | None = None):
         self._items = items
+        self._count_error = count_error
 
     def count(self) -> int:
+        if self._count_error is not None:
+            raise self._count_error
         return len(self._items)
 
     def nth(self, index):
@@ -277,11 +280,14 @@ class _FakeBodyLocator:
 
 
 class FakeContactPage:
-    def __init__(self, *, post_html: str, buttons, body_text: str, url: str):
+    def __init__(
+        self, *, post_html: str, buttons, body_text: str, url: str, scan_error=None
+    ):
         self._snapshots = [_LIVE_CONTACT_DETAIL_HTML, post_html]
         self.url = url
         self._buttons = buttons
         self._body_text = body_text
+        self._scan_error = scan_error
         self.locator_selectors: list[str] = []
         self.waits = 0
 
@@ -297,7 +303,7 @@ class FakeContactPage:
         self.locator_selectors.append(selector)
         if selector == "body":
             return _FakeBodyLocator(self._body_text)
-        return _FakeSelectorLocator(self._buttons)
+        return _FakeSelectorLocator(self._buttons, count_error=self._scan_error)
 
 
 def test_live_contact_locator_includes_role_buttons():
@@ -344,7 +350,23 @@ def test_live_contact_success_marker_must_be_visible_text():
     assert confirmed["needs_manual_verification"] is False
 
 
-def test_live_contact_unclickable_button_is_pre_click_abort():
+def test_live_contact_locator_failure_is_pre_click_abort():
+    page = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话</div>",
+        buttons=[],
+        body_text="继续沟通",
+        url="https://www.zhipin.com/job_detail/test123.html",
+        scan_error=RuntimeError("page detached during locator scan"),
+    )
+
+    # Locating/visibility checks run before any mouse event, so a failure there is
+    # a pre-click abort the runner can release rather than a burned cap slot.
+    with pytest.raises(HumanPauseRequired) as exc_info:
+        _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
+    assert exc_info.value.reason == "contact_locator_unavailable"
+
+
+def test_live_contact_click_failure_propagates_for_post_click_handling():
     page = FakeContactPage(
         post_html="<div class='job-detail'>已进入会话</div>",
         buttons=[_FakeButton(visible=True, raise_on_click=True)],
@@ -352,9 +374,9 @@ def test_live_contact_unclickable_button_is_pre_click_abort():
         url="https://www.zhipin.com/job_detail/test123.html",
     )
 
-    # A click that fails Playwright actionability sends no mouse event, so it must
-    # surface as a pre-click abort (the runner releases the reservation) rather
-    # than a post-click failure that would consume the daily cap.
-    with pytest.raises(HumanPauseRequired) as exc_info:
+    # A click can throw after the mouse event is dispatched; that must NOT become a
+    # pre-click abort (which would release and risk a duplicate). It propagates so
+    # the runner's generic handler confirms a possible contact instead.
+    with pytest.raises(RuntimeError) as exc_info:
         _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
-    assert exc_info.value.reason == "contact_button_unclickable"
+    assert not isinstance(exc_info.value, HumanPauseRequired)
