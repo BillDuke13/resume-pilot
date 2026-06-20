@@ -12,6 +12,8 @@ import websockets
 
 from resume_pilot.config import default_cdp_url
 
+CDP_RECV_TIMEOUT_SECONDS = 30
+
 
 class CdpError(RuntimeError):
     """Raised when direct CDP control cannot complete safely."""
@@ -130,7 +132,15 @@ async def cdp_evaluate(web_socket_url: str, expression: str) -> Any:
                 current_id = next_id
                 next_id += 1
                 while True:
-                    response = json.loads(await socket.recv())
+                    try:
+                        raw = await asyncio.wait_for(
+                            socket.recv(), timeout=CDP_RECV_TIMEOUT_SECONDS
+                        )
+                    except TimeoutError as exc:
+                        raise CdpError(
+                            f"CDP response timed out after {CDP_RECV_TIMEOUT_SECONDS}s"
+                        ) from exc
+                    response = json.loads(raw)
                     if response.get("id") == current_id:
                         if "error" in response:
                             raise CdpError(
@@ -165,7 +175,15 @@ async def cdp_navigate(web_socket_url: str, url: str) -> None:
                 current_id = next_id
                 next_id += 1
                 while True:
-                    response = json.loads(await socket.recv())
+                    try:
+                        raw = await asyncio.wait_for(
+                            socket.recv(), timeout=CDP_RECV_TIMEOUT_SECONDS
+                        )
+                    except TimeoutError as exc:
+                        raise CdpError(
+                            f"CDP response timed out after {CDP_RECV_TIMEOUT_SECONDS}s"
+                        ) from exc
+                    response = json.loads(raw)
                     if response.get("id") == current_id:
                         if "error" in response:
                             raise CdpError(
@@ -193,7 +211,13 @@ async def cdp_bring_to_front(web_socket_url: str) -> None:
         async with websockets.connect(web_socket_url, max_size=30_000_000) as socket:
             await socket.send(json.dumps({"id": 1, "method": "Page.bringToFront"}))
             while True:
-                response = json.loads(await socket.recv())
+                try:
+                    raw = await asyncio.wait_for(socket.recv(), timeout=CDP_RECV_TIMEOUT_SECONDS)
+                except TimeoutError as exc:
+                    raise CdpError(
+                        f"CDP response timed out after {CDP_RECV_TIMEOUT_SECONDS}s"
+                    ) from exc
+                response = json.loads(raw)
                 if response.get("id") == 1:
                     if "error" in response:
                         raise CdpError(json.dumps(response["error"], ensure_ascii=False))
@@ -224,7 +248,15 @@ async def cdp_dispatch_mouse_click(
                 current_id = next_id
                 next_id += 1
                 while True:
-                    response = json.loads(await socket.recv())
+                    try:
+                        raw = await asyncio.wait_for(
+                            socket.recv(), timeout=CDP_RECV_TIMEOUT_SECONDS
+                        )
+                    except TimeoutError as exc:
+                        raise CdpError(
+                            f"CDP response timed out after {CDP_RECV_TIMEOUT_SECONDS}s"
+                        ) from exc
+                    response = json.loads(raw)
                     if response.get("id") == current_id:
                         if "error" in response:
                             raise CdpError(

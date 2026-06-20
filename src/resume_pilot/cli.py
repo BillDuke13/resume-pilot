@@ -202,13 +202,18 @@ def _paths(args: argparse.Namespace) -> AppPaths:
 
 
 def _load_profile_summary(paths: AppPaths, summary_file: Path | None) -> str | None:
-    source = summary_file or (paths.profile_cache if paths.profile_cache.exists() else None)
-    if source is None:
-        return None
-    try:
-        raw = source.read_text(encoding="utf-8")
-    except OSError:
-        return None
+    if summary_file is not None:
+        # An explicit override must exist and be readable; do not silently fall back
+        # to "no profile" and let the LLM decide without the requested policy.
+        raw = summary_file.read_text(encoding="utf-8")
+    else:
+        cache = paths.profile_cache
+        if not cache.exists():
+            return None
+        try:
+            raw = cache.read_text(encoding="utf-8")
+        except OSError:
+            return None
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -299,7 +304,11 @@ def cmd_profile_extract(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     paths = _paths(args)
     state = StateStore(paths.state_db)
-    profile_summary = _load_profile_summary(paths, args.profile_summary_file)
+    try:
+        profile_summary = _load_profile_summary(paths, args.profile_summary_file)
+    except OSError as exc:
+        print(f"Cannot read --profile-summary-file: {exc}", file=sys.stderr)
+        return 2
     if args.decision_fixture and not args.dry_run:
         print(
             "Live --execute cannot use --decision-fixture; it requires a real LLM decision.",
@@ -354,7 +363,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             daily_cap=args.daily_cap,
             limit=args.limit,
-            profile_summary=args.profile_summary,
+            profile_summary=profile_summary,
         )
     except HumanPauseRequired as exc:
         _print_json({"paused": True, "reason": exc.reason, "details": str(exc.details)})

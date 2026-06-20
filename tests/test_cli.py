@@ -166,3 +166,42 @@ def test_load_profile_summary_returns_none_without_cache_or_file(tmp_path):
     )
 
     assert _load_profile_summary(paths, None) is None
+
+
+def test_load_profile_summary_raises_when_explicit_file_missing(tmp_path):
+    from resume_pilot.cli import _load_profile_summary
+    from resume_pilot.config import AppPaths
+
+    paths = AppPaths(
+        state_db=tmp_path / "state.sqlite",
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+        chrome_profile=tmp_path / "chrome-profile",
+        profile_cache=tmp_path / "cache.json",
+        browser_pid=tmp_path / "browser.pid",
+        browser_log=tmp_path / "browser.log",
+    )
+
+    with pytest.raises(OSError):
+        _load_profile_summary(paths, tmp_path / "does-not-exist.txt")
+
+
+def test_run_over_saved_html_fixture_does_not_crash(tmp_path, capsys):
+    exit_code = main(
+        [
+            "--state-db",
+            str(tmp_path / "state.sqlite"),
+            "run",
+            "--dry-run",
+            "--decision-fixture",
+            "skip",
+            "--source-url",
+            "https://www.zhipin.com/web/geek/jobs",
+            "--html-file",
+            "ops/fixtures/boss_jobs.html",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert "discovered" in output

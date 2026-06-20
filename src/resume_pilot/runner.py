@@ -62,9 +62,21 @@ class ContactExecutor(Protocol):
     def __call__(self, job: JobCard) -> dict[str, Any]: ...
 
 
+_UNTRUSTED_MARKER_RE = re.compile(r"</?\s*untrusted_job_posting\s*>", re.IGNORECASE)
+
+
+def _strip_untrusted_markers(value: str) -> str:
+    return _UNTRUSTED_MARKER_RE.sub("", value)
+
+
 def build_job_decision_prompt(job: JobCard, profile_summary: str | None = None) -> str:
     profile = profile_summary or "No resume profile summary has been extracted yet."
-    raw_text = (job.raw_text or "")[:MAX_JOB_PROMPT_TEXT_CHARS]
+    title = _strip_untrusted_markers(job.title)
+    company = _strip_untrusted_markers(job.company)
+    salary = _strip_untrusted_markers(job.salary or "")
+    location = _strip_untrusted_markers(job.location or "")
+    detail_url = _strip_untrusted_markers(job.detail_url or "")
+    raw_text = _strip_untrusted_markers((job.raw_text or "")[:MAX_JOB_PROMPT_TEXT_CHARS])
     return f"""
 You decide whether this BOSS Zhipin role should receive the first platform action.
 Return only JSON with fields:
@@ -92,11 +104,11 @@ Resume profile:
 {profile}
 
 <untrusted_job_posting>
-title: {job.title}
-company: {job.company}
-salary: {job.salary or ""}
-location: {job.location or ""}
-detail_url: {job.detail_url or ""}
+title: {title}
+company: {company}
+salary: {salary}
+location: {location}
+detail_url: {detail_url}
 raw_text: {raw_text}
 </untrusted_job_posting>
 """.strip()

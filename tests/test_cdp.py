@@ -360,3 +360,30 @@ def test_cdp_evaluate_raises_on_top_level_cdp_error(monkeypatch):
         assert "Target closed" in str(exc)
     else:
         raise AssertionError("expected CdpError on a top-level CDP error")
+
+
+def test_cdp_evaluate_times_out_on_stuck_target(monkeypatch):
+    monkeypatch.setattr(cdp, "CDP_RECV_TIMEOUT_SECONDS", 0.05)
+
+    class _SilentSocket:
+        async def send(self, _message):
+            return None
+
+        async def recv(self):
+            await asyncio.sleep(5)
+            return "{}"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(cdp.websockets, "connect", lambda *_a, **_k: _SilentSocket())
+
+    try:
+        asyncio.run(cdp.cdp_evaluate("ws://target", "document.title"))
+    except cdp.CdpError as exc:
+        assert "timed out" in str(exc)
+    else:
+        raise AssertionError("expected CdpError on a stuck CDP target")
