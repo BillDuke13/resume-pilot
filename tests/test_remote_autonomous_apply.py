@@ -710,3 +710,25 @@ def test_navigation_drift_aborts_before_click(monkeypatch, tmp_path):
         raise AssertionError("expected RuntimeError on navigation drift")
 
     assert len(navigated) == 1
+
+
+def test_already_contacted_job_is_skipped_before_opening_detail(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    job = make_job(module)
+    job_id, _ = module.store.upsert_job(job)
+    module.store.reserve_contact(job_id, daily_cap=150)
+
+    opened = []
+
+    async def fail_open_html(url, *, settle_seconds):
+        opened.append(url)
+        raise AssertionError("must not open the detail page for an already-contacted job")
+
+    monkeypatch.setattr(module, "open_html", fail_open_html)
+
+    keep_going = asyncio.run(
+        module.process_job(job, policy=make_policy(module, tmp_path), profile_summary="Policy.")
+    )
+
+    assert keep_going is True
+    assert opened == []

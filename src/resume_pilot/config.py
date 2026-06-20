@@ -57,8 +57,13 @@ def default_cdp_port() -> int:
     return int(os.environ.get("RESUME_PILOT_CDP_PORT", str(DEFAULT_CDP_PORT)))
 
 
+def format_cdp_url(host: str, port: int) -> str:
+    bracketed = f"[{host}]" if ":" in host else host
+    return f"http://{bracketed}:{port}"
+
+
 def default_cdp_url() -> str:
-    return f"http://{default_cdp_host()}:{default_cdp_port()}"
+    return format_cdp_url(default_cdp_host(), default_cdp_port())
 
 
 def ensure_private_dir(path: Path) -> Path:

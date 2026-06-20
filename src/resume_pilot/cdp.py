@@ -139,9 +139,10 @@ async def cdp_evaluate(web_socket_url: str, expression: str) -> Any:
                 "Runtime.evaluate",
                 {"expression": expression, "returnByValue": True, "awaitPromise": True},
             )
-            if "exceptionDetails" in result:
-                raise CdpError(json.dumps(result["exceptionDetails"], ensure_ascii=False)[:1000])
-            return result.get("result", {}).get("result", {}).get("value")
+            payload = result.get("result", {})
+            if "exceptionDetails" in payload:
+                raise CdpError(json.dumps(payload["exceptionDetails"], ensure_ascii=False)[:1000])
+            return payload.get("result", {}).get("value")
     except CdpError:
         raise
     except Exception as exc:

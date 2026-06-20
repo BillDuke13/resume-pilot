@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import stat
 
-from resume_pilot.config import ensure_private_dir, ensure_private_parent
+from resume_pilot.config import ensure_private_dir, ensure_private_parent, format_cdp_url
 
 
 def test_ensure_private_dir_locks_down_existing_loose_directory(tmp_path):
@@ -31,3 +31,8 @@ def test_ensure_private_parent_secures_directories_it_creates(tmp_path):
     ensure_private_parent(db)
 
     assert stat.S_IMODE(db.parent.stat().st_mode) == 0o700
+
+
+def test_format_cdp_url_brackets_ipv6_loopback():
+    assert format_cdp_url("127.0.0.1", 9222) == "http://127.0.0.1:9222"
+    assert format_cdp_url("::1", 9222) == "http://[::1]:9222"

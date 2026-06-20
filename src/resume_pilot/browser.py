@@ -17,6 +17,7 @@ from resume_pilot.config import (
     default_cdp_host,
     default_cdp_port,
     default_cdp_url,
+    format_cdp_url,
 )
 
 BROWSER_CANDIDATES = (
@@ -69,7 +70,7 @@ class BrowserManager:
         self.paths = paths or AppPaths.defaults()
         self.cdp_host = cdp_host or default_cdp_host()
         self.cdp_port = cdp_port or default_cdp_port()
-        self.cdp_url = f"http://{self.cdp_host}:{self.cdp_port}"
+        self.cdp_url = format_cdp_url(self.cdp_host, self.cdp_port)
 
     def status(self) -> BrowserStatus:
         version = fetch_cdp_version(self.cdp_url)

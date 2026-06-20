@@ -787,6 +787,10 @@ async def process_job(
     if not is_allowed_boss_detail_url(list_job.detail_url):
         emit("skip", title=list_job.title, salary=list_job.salary, reason="unsupported_detail_url")
         return True
+    known = store.get_job_by_platform_id(list_job.platform_job_id)
+    if known and store.has_action(int(known["id"]), ApplicationAction.IMMEDIATE_CONTACT):
+        emit("skip", title=list_job.title, salary=list_job.salary, reason="already_contacted")
+        return True
     detail_target, detail_html, detail_text = await open_html(
         list_job.detail_url,
         settle_seconds=6.0,

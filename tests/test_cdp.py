@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 from io import BytesIO
 
@@ -298,3 +299,52 @@ def test_open_url_uses_visible_chrome_address_bar(monkeypatch):
     )
     assert expected_url in command[2]
     assert kwargs["timeout"] == 20
+
+
+class _FakeCdpSocket:
+    def __init__(self, responses):
+        self._responses = responses
+
+    async def send(self, _message):
+        return None
+
+    async def recv(self):
+        return json.dumps(self._responses.pop(0))
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+def test_cdp_evaluate_raises_on_nested_runtime_exception(monkeypatch):
+    responses = [
+        {"id": 1, "result": {}},
+        {
+            "id": 2,
+            "result": {
+                "exceptionDetails": {"text": "Uncaught", "exception": {"description": "boom"}}
+            },
+        },
+    ]
+    monkeypatch.setattr(cdp.websockets, "connect", lambda *_a, **_k: _FakeCdpSocket(responses))
+
+    try:
+        asyncio.run(cdp.cdp_evaluate("ws://target", "throw new Error('boom')"))
+    except cdp.CdpError as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("expected CdpError on a Runtime.evaluate exception")
+
+
+def test_cdp_evaluate_returns_value_without_exception(monkeypatch):
+    responses = [
+        {"id": 1, "result": {}},
+        {"id": 2, "result": {"result": {"type": "string", "value": "hello"}}},
+    ]
+    monkeypatch.setattr(cdp.websockets, "connect", lambda *_a, **_k: _FakeCdpSocket(responses))
+
+    result = asyncio.run(cdp.cdp_evaluate("ws://target", "'hello'"))
+
+    assert result == "hello"
