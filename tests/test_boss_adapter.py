@@ -266,3 +266,19 @@ def test_detail_page_ignores_recommendation_links():
     assert len(jobs) == 1
     assert jobs[0].title == "Selected Engineer"
     assert jobs[0].platform_job_id == "selected"
+
+
+def test_card_prefers_job_detail_url_id_over_volatile_data_lid():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <li class="job-card-wrapper" data-lid="session-token-abc">
+          <a class="job-name" href="/job_detail/stable-id.html">Engineer</a>
+          <span class="company-name">Example</span>
+        </li>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs",
+    )
+
+    assert jobs[0].platform_job_id == "stable-id"

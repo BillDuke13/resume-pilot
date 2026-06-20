@@ -22,6 +22,7 @@ apt-get install -y --no-install-recommends \
   fonts-noto-color-emoji \
   fonts-wqy-zenhei \
   git \
+  iproute2 \
   openssl \
   pipx \
   procps \

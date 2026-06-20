@@ -138,3 +138,21 @@ def test_run_json_passes_prompt_via_stdin_not_arguments(monkeypatch):
 
     assert secret_prompt not in captured["args"]
     assert captured["input"] == secret_prompt
+
+
+def test_run_json_disables_builtin_tools(monkeypatch):
+    client = ClaudeCodeClient()
+    monkeypatch.setattr(ClaudeCodeClient, "available", lambda _self: True)
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    client.run_json("untrusted job-page text")
+
+    args = captured["args"]
+    assert "--tools" in args
+    assert args[args.index("--tools") + 1] == ""

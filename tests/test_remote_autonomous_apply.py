@@ -572,3 +572,100 @@ def test_merge_detail_job_ignores_unrelated_recommendation_salary(monkeypatch, t
     merged = module.merge_detail_job(list_job, detail_html, list_job.detail_url)
 
     assert merged.salary == "40-55K"
+
+
+def _apply_client(module):
+    class FakeClient:
+        def run_json(self, _prompt):
+            return json.dumps(
+                {
+                    "decision": "apply",
+                    "confidence": 0.95,
+                    "reason": "Strong candidate-side match",
+                    "resume_match_signals": ["K8s"],
+                    "risk_flags": [],
+                }
+            )
+
+    return FakeClient()
+
+
+async def _detail_open_html(_url, *, settle_seconds):
+    return (
+        SimpleNamespace(web_socket_debugger_url="ws://target"),
+        "<html><body>立即沟通 Role detail</body></html>",
+        "Role detail",
+    )
+
+
+def test_already_in_conversation_does_not_consume_daily_cap(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    async def fake_click(*_args, **_kwargs):
+        return {
+            "clicked_label": "继续沟通",
+            "already_in_conversation": True,
+            "post_click_verified": True,
+            "needs_manual_verification": False,
+        }
+
+    monkeypatch.setattr(module, "client", _apply_client(module))
+    monkeypatch.setattr(module, "open_html", _detail_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(make_job(module), policy=make_policy(module, tmp_path),
+                           profile_summary="Private policy.")
+    )
+
+    assert keep_going is True
+    job = module.store.get_job_by_platform_id("boss:sample-k8s")
+    assert module.store.has_action(job["id"], module.ApplicationAction.IMMEDIATE_CONTACT) is False
+    assert module.store.action_count(module.ApplicationAction.IMMEDIATE_CONTACT) == 0
+
+
+def test_post_click_failure_keeps_reservation(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    async def fake_click(*_args, **_kwargs):
+        raise RuntimeError("websocket read failed after click")
+
+    monkeypatch.setattr(module, "client", _apply_client(module))
+    monkeypatch.setattr(module, "open_html", _detail_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(make_job(module), policy=make_policy(module, tmp_path),
+                           profile_summary="Private policy.")
+    )
+
+    assert keep_going is False
+    job = module.store.get_job_by_platform_id("boss:sample-k8s")
+    assert module.store.has_action(job["id"], module.ApplicationAction.IMMEDIATE_CONTACT) is True
+
+
+def test_pre_click_failure_releases_reservation(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    async def fake_click(*_args, **_kwargs):
+        raise RuntimeError("contact_button_not_safe:{'reason': 'risk'}")
+
+    monkeypatch.setattr(module, "client", _apply_client(module))
+    monkeypatch.setattr(module, "open_html", _detail_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(make_job(module), policy=make_policy(module, tmp_path),
+                           profile_summary="Private policy.")
+    )
+
+    assert keep_going is False
+    job = module.store.get_job_by_platform_id("boss:sample-k8s")
+    assert module.store.has_action(job["id"], module.ApplicationAction.IMMEDIATE_CONTACT) is False
+
+
+def test_bootstrap_installs_iproute2_for_ss():
+    bootstrap = (
+        Path(__file__).resolve().parents[1] / "ops/remote/bootstrap_debian.sh"
+    ).read_text(encoding="utf-8")
+    assert "iproute2" in bootstrap

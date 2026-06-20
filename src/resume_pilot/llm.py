@@ -143,6 +143,8 @@ class ClaudeCodeClient:
                     "-p",
                     "--model",
                     self.model,
+                    "--tools",
+                    "",
                     "--output-format",
                     "json",
                 ],

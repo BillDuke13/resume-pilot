@@ -38,6 +38,11 @@ from resume_pilot.state import BudgetExceededError, DuplicateActionError, StateS
 
 POLICY_ENV = "RESUME_PILOT_AUTONOMOUS_POLICY"
 SUCCESS_MARKERS = ("发送简历", "继续沟通", "沟通中", "聊天", "常用语")
+PRE_CLICK_ABORT_PREFIXES = (
+    "contact_button_unavailable:",
+    "page_risk_before_click:",
+    "contact_button_not_safe:",
+)
 JOB_DETAIL_PATH_RE = re.compile(r"/job_detail/[^/?#]+")
 ALLOWED_BOSS_HOSTS = {
     "zhipin.com",
@@ -893,27 +898,36 @@ async def process_job(
             job.detail_url or "",
         )
     except Exception as exc:
-        store.release_contact(job_id)
+        message = str(exc)
+        if message.startswith(PRE_CLICK_ABORT_PREFIXES):
+            store.release_contact(job_id)
         store.finish_action_attempt(
             attempt_id,
             status="failed",
-            details={"error": str(exc), "job_id": job.platform_job_id},
+            details={"error": message, "job_id": job.platform_job_id},
         )
-        if str(exc).startswith("contact_button_unavailable:"):
+        if message.startswith("contact_button_unavailable:"):
             record_skip(job_id, "contact_button_unavailable", confidence=0.0)
             emit(
                 "skip",
                 title=job.title,
                 salary=job.salary,
                 reason="contact_button_unavailable",
-                error=str(exc)[:500],
+                error=message[:500],
             )
             return True
-        pause("contact_click_failed", title=job.title, url=job.detail_url, error=str(exc))
+        pause("contact_click_failed", title=job.title, url=job.detail_url, error=message)
         return False
 
     details = {**details, "attempt_id": attempt_id}
     store.finish_action_attempt(attempt_id, status="clicked", details=details)
+    if details.get("already_in_conversation"):
+        store.release_contact(job_id)
+        store.finish_action_attempt(
+            attempt_id, status="already_in_conversation", details=details
+        )
+        emit("already_in_conversation", title=job.title, url=job.detail_url)
+        return True
     store.confirm_contact(job_id, details=details)
     store.finish_action_attempt(attempt_id, status="recorded", details=details)
     if details.get("needs_manual_verification"):

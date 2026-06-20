@@ -140,7 +140,9 @@ class BossHtmlAdapter:
                 salary = _salary_from_text(raw_text)
             location = _first_text(root, (".job-area", ".location", "[data-role='location']"))
             platform_job_id = (
-                str(root.get("data-job-id") or root.get("data-jobid") or root.get("data-lid") or "")
+                str(root.get("data-job-id") or root.get("data-jobid") or "")
+                or _detail_url_job_id(detail_url)
+                or str(root.get("data-lid") or "")
                 or _job_id_from_url(detail_url)
                 or _stable_job_id(title, company, detail_url)
             )
