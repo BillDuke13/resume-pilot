@@ -344,7 +344,17 @@ def test_execute_requires_safe_apply_decision_before_click(tmp_path):
     assert clicked == []
 
 
-def test_failed_click_releases_reserved_contact_budget(tmp_path):
+_SINGLE_CONTACT_HTML = """
+<li class="job-card-wrapper" data-job-id="one">
+  <a class="job-name" href="/job_detail/one.html">Automation Engineer</a>
+  <span class="salary">35-45K</span>
+  <span class="company-name">Example</span>
+  <button>立即沟通</button>
+</li>
+"""
+
+
+def test_pre_click_abort_releases_reserved_contact_budget(tmp_path):
     store = StateStore(tmp_path / "state.sqlite")
     runner = ResumePilotRunner(
         state=store,
@@ -352,25 +362,42 @@ def test_failed_click_releases_reserved_contact_budget(tmp_path):
         adapter=BossHtmlAdapter(),
     )
 
-    def failing_executor(_job):
-        raise RuntimeError("click crashed")
+    def aborting_executor(_job):
+        raise HumanPauseRequired("visible_contact_button_not_unique", {})
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(HumanPauseRequired):
         runner.evaluate_static_html(
-            """
-            <li class="job-card-wrapper" data-job-id="one">
-              <a class="job-name" href="/job_detail/one.html">Automation Engineer</a>
-              <span class="salary">35-45K</span>
-              <span class="company-name">Example</span>
-              <button>立即沟通</button>
-            </li>
-            """,
+            _SINGLE_CONTACT_HTML,
             source_url="https://www.zhipin.com/web/geek/job",
             dry_run=False,
             daily_cap=1,
-            contact_executor=failing_executor,
+            contact_executor=aborting_executor,
         )
 
     job = store.get_job_by_platform_id("one")
     assert store.has_action(job["id"], ApplicationAction.IMMEDIATE_CONTACT) is False
     assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT) == 0
+
+
+def test_indeterminate_click_failure_keeps_reservation(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    runner = ResumePilotRunner(
+        state=store,
+        llm_client=FakeLlmClient(),
+        adapter=BossHtmlAdapter(),
+    )
+
+    def crashing_executor(_job):
+        raise RuntimeError("post-click verification read crashed")
+
+    with pytest.raises(RuntimeError):
+        runner.evaluate_static_html(
+            _SINGLE_CONTACT_HTML,
+            source_url="https://www.zhipin.com/web/geek/job",
+            dry_run=False,
+            daily_cap=1,
+            contact_executor=crashing_executor,
+        )
+
+    job = store.get_job_by_platform_id("one")
+    assert store.has_action(job["id"], ApplicationAction.IMMEDIATE_CONTACT) is True

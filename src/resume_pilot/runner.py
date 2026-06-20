@@ -259,8 +259,20 @@ class ResumePilotRunner:
             )
             try:
                 details = contact_executor(job)
-            except Exception as exc:
+            except HumanPauseRequired:
+                # Raised only before the click is dispatched, so no platform action
+                # occurred; free the reserved budget slot for a later retry.
                 self.state.release_contact(job_id)
+                self.state.finish_action_attempt(
+                    attempt_id,
+                    status="failed",
+                    details={"job_id": job.platform_job_id, "error": "pre_click_abort"},
+                )
+                raise
+            except Exception as exc:
+                # The click may already have been sent (for example a post-click read
+                # failed), so keep the reservation to avoid contacting the same
+                # recruiter twice on the next run.
                 self.state.finish_action_attempt(
                     attempt_id,
                     status="failed",

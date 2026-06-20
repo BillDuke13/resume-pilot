@@ -34,7 +34,11 @@ if [[ ! -d "${WEB_DIR}" ]]; then
   exit 1
 fi
 
-install -d -m 700 -o "${APP_USER}" -g "${APP_USER}" "${STATE_DIR}"
+if [[ "${EUID}" -eq 0 ]]; then
+  install -d -m 700 -o "${APP_USER}" -g "${APP_USER}" "${STATE_DIR}"
+else
+  install -d -m 700 "${STATE_DIR}"
+fi
 
 if ss -ltn | awk '{print $4}' | grep -qE "(^|:)${NO_VNC_PORT}$"; then
   echo "noVNC is already listening on ${NO_VNC_HOST}:${NO_VNC_PORT}."

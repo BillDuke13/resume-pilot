@@ -238,3 +238,31 @@ def test_detail_card_uses_job_detail_url_id_for_dedupe():
     )
 
     assert jobs[0].platform_job_id == "xyz789"
+
+
+def test_detail_page_ignores_recommendation_links():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Selected Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+          <div class="recommend-list">
+            <a class="job-name" href="/job_detail/reco1.html">Recommended One 8-10K</a>
+            <a class="job-name" href="/job_detail/reco2.html">Recommended Two 9-12K</a>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/selected.html",
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Selected Engineer"
+    assert jobs[0].platform_job_id == "selected"

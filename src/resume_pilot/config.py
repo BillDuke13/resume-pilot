@@ -49,10 +49,16 @@ def default_browser_log_path() -> Path:
     return default_state_dir() / "browser.log"
 
 
+def default_cdp_host() -> str:
+    return os.environ.get("RESUME_PILOT_CDP_HOST", DEFAULT_CDP_HOST)
+
+
+def default_cdp_port() -> int:
+    return int(os.environ.get("RESUME_PILOT_CDP_PORT", str(DEFAULT_CDP_PORT)))
+
+
 def default_cdp_url() -> str:
-    host = os.environ.get("RESUME_PILOT_CDP_HOST", DEFAULT_CDP_HOST)
-    port = int(os.environ.get("RESUME_PILOT_CDP_PORT", str(DEFAULT_CDP_PORT)))
-    return f"http://{host}:{port}"
+    return f"http://{default_cdp_host()}:{default_cdp_port()}"
 
 
 def ensure_private_dir(path: Path) -> Path:

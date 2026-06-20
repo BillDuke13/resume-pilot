@@ -99,3 +99,34 @@ def test_browser_stop_returns_nonzero_when_browser_survives(tmp_path, monkeypatc
     exit_code = main(["--state-db", str(tmp_path / "state.sqlite"), "browser", "stop"])
 
     assert exit_code == 1
+
+
+def test_live_execute_requires_managed_browser(tmp_path, monkeypatch, capsys):
+    from resume_pilot.browser import BrowserManager, BrowserStatus
+
+    monkeypatch.setattr(
+        BrowserManager,
+        "status",
+        lambda _self: BrowserStatus(
+            running=False,
+            cdp_url="http://127.0.0.1:9222",
+            detail="CDP port is serving an unmanaged browser; refusing to use it",
+        ),
+    )
+
+    exit_code = main(
+        [
+            "--state-db",
+            str(tmp_path / "state.sqlite"),
+            "run",
+            "--execute",
+            "--confirm-live-contact",
+            "--source-url",
+            "https://www.zhipin.com/web/geek/jobs",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 3
+    assert output["paused"] is True
+    assert "managed_browser_not_running" in output["reason"]

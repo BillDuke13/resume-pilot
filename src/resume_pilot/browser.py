@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from resume_pilot.config import (
-    DEFAULT_CDP_HOST,
-    DEFAULT_CDP_PORT,
     AppPaths,
+    default_cdp_host,
+    default_cdp_port,
     default_cdp_url,
 )
 
@@ -62,13 +62,13 @@ class BrowserManager:
         self,
         paths: AppPaths | None = None,
         *,
-        cdp_host: str = DEFAULT_CDP_HOST,
-        cdp_port: int = DEFAULT_CDP_PORT,
+        cdp_host: str | None = None,
+        cdp_port: int | None = None,
     ):
         self.paths = paths or AppPaths.defaults()
-        self.cdp_host = cdp_host
-        self.cdp_port = cdp_port
-        self.cdp_url = f"http://{cdp_host}:{cdp_port}"
+        self.cdp_host = cdp_host or default_cdp_host()
+        self.cdp_port = cdp_port or default_cdp_port()
+        self.cdp_url = f"http://{self.cdp_host}:{self.cdp_port}"
 
     def status(self) -> BrowserStatus:
         version = fetch_cdp_version(self.cdp_url)

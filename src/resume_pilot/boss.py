@@ -110,6 +110,9 @@ class BossHtmlAdapter:
 
     def extract_job_cards(self, html: str, *, source_url: str) -> list[JobCard]:
         soup = BeautifulSoup(html, "html.parser")
+        detail_card = self._extract_selected_detail_card(soup, source_url=source_url)
+        if detail_card is not None:
+            return [detail_card]
         cards: dict[str, JobCard] = {}
         anchors = [
             anchor
@@ -152,10 +155,6 @@ class BossHtmlAdapter:
                     location=location,
                     raw_text=raw_text,
                 )
-        if not cards:
-            detail_card = self._extract_selected_detail_card(soup, source_url=source_url)
-            if detail_card:
-                cards[detail_card.platform_job_id] = detail_card
         return list(cards.values())
 
     def _extract_selected_detail_card(

@@ -81,3 +81,13 @@ def test_status_accepts_managed_cdp_browser(tmp_path, monkeypatch):
     status = manager.status()
 
     assert status.running is True
+
+
+def test_browser_manager_honors_cdp_env_overrides(tmp_path, monkeypatch):
+    monkeypatch.setenv("RESUME_PILOT_CDP_HOST", "127.0.0.1")
+    monkeypatch.setenv("RESUME_PILOT_CDP_PORT", "9333")
+
+    manager = BrowserManager(_paths(tmp_path))
+
+    assert manager.cdp_port == 9333
+    assert manager.cdp_url == "http://127.0.0.1:9333"

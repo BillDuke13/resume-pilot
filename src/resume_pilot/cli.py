@@ -315,6 +315,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     return 2
                 summary = _execute_live_run(
                     runner,
+                    paths=paths,
                     source_url=args.source_url,
                     daily_cap=args.daily_cap,
                     limit=args.limit,
@@ -406,12 +407,19 @@ def _read_live_page_html(url: str | None) -> str:
 def _execute_live_run(
     runner: ResumePilotRunner,
     *,
+    paths: AppPaths,
     source_url: str,
     daily_cap: int,
     limit: int | None,
     profile_summary: str | None,
 ):
     _validate_boss_source_url(source_url)
+    status = BrowserManager(paths).status()
+    if not status.running:
+        raise HumanPauseRequired(
+            "managed_browser_not_running",
+            {"detail": status.detail, "cdp_url": status.cdp_url},
+        )
     playwright = None
     browser = None
     try:
