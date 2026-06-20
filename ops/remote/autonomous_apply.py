@@ -622,8 +622,12 @@ async def click_immediate_contact(
         );
         return top && (el === top || el.contains(top));
       };
+      const scope = document.querySelector('.job-detail-box');
+      if (!scope) {
+        return {ok: false, reason: 'visible_contact_button_not_unique', count: 0};
+      }
       const findMatches = (selector, labels) => Array.from(
-        document.querySelectorAll(selector)
+        scope.querySelectorAll(selector)
       ).filter((el) => {
         const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
         if (!labels.some((label) => text.includes(label)) || !visible(el)) {
@@ -999,6 +1003,16 @@ async def main() -> int:
         minimum_monthly_salary_k=policy.minimum_monthly_salary_k,
         keyword_count=len(keywords),
     )
+    active = store.active_pauses()
+    if active:
+        # Refuse to open pages or contact more jobs while a prior run's pause is
+        # unresolved; manual takeover must clear it first.
+        emit(
+            "blocked_by_active_pauses",
+            count=len(active),
+            reasons=[pause_row["reason"] for pause_row in active],
+        )
+        return 2
     if current >= policy.daily_cap:
         emit("cap_reached", today=current, daily_cap=policy.daily_cap)
         return 0

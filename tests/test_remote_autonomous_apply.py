@@ -1110,3 +1110,37 @@ def test_prior_llm_timeout_does_not_permanently_skip(monkeypatch, tmp_path):
     # and contacted on a later run.
     assert contacted == [True]
     assert keep_going is True
+
+
+def test_main_refuses_to_run_with_unresolved_pause(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    module.store.pause("page_risk_on_search", details={"keyword": "k8s"})
+
+    async def fail_open_html(_url, *, settle_seconds):
+        raise AssertionError("must not open pages while a pause is unresolved")
+
+    monkeypatch.setattr(
+        module.AutonomousPolicy,
+        "load",
+        classmethod(lambda _cls, _paths: make_policy(module, tmp_path)),
+    )
+    monkeypatch.setattr(module, "load_profile", lambda _policy: ("Policy.", ["Kubernetes"]))
+    monkeypatch.setattr(module, "open_html", fail_open_html)
+
+    rc = asyncio.run(module.main())
+
+    # A new run must not proceed while a previous pause awaits manual takeover.
+    assert rc == 2
+
+
+def test_cdp_contact_search_is_scoped_to_selected_detail_box(monkeypatch, tmp_path):
+    import inspect
+
+    module = load_remote_module(monkeypatch, tmp_path)
+    source = inspect.getsource(module.click_immediate_contact)
+
+    # The in-browser contact search must be scoped to the selected job's box so a
+    # recommendation card's control cannot be borrowed (mirrors the HTML adapter).
+    assert ".job-detail-box" in source
+    assert "scope.querySelectorAll" in source
+    assert "document.querySelectorAll" not in source
