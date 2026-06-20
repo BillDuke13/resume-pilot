@@ -377,6 +377,10 @@ def test_pre_click_abort_releases_reserved_contact_budget(tmp_path):
     job = store.get_job_by_platform_id("one")
     assert store.has_action(job["id"], ApplicationAction.IMMEDIATE_CONTACT) is False
     assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT) == 0
+    # The abort reason must be persisted so manual takeover has an audited pause.
+    assert any(
+        p["reason"] == "visible_contact_button_not_unique" for p in store.active_pauses()
+    )
 
 
 def test_indeterminate_click_failure_confirms_contact_and_pauses(tmp_path):

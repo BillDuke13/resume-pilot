@@ -392,3 +392,51 @@ def test_detail_page_selected_in_conversation_does_not_borrow_recommendation_but
     titles = {job.title for job in jobs}
     assert "selected" not in ids
     assert "Selected Engineer" not in titles
+
+
+def test_detail_container_without_box_does_not_borrow_recommendation_contact():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <h1>Selected No Box Engineer 30-50K</h1>
+          <div class="recommend-list">
+            <div class="job-card-wrapper">
+              <a class="job-name" href="/job_detail/reco9.html">Recommended Nine 8-10K</a>
+              <a class="op-btn">立即沟通</a>
+            </div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/selected-no-box.html",
+    )
+
+    # Without a .job-detail-box there is no authoritative selected job, so the
+    # outer container's only 立即沟通 (a recommendation's) must not be borrowed to
+    # synthesize a contactable card for the detail URL's posting.
+    titles = {job.title for job in jobs}
+    assert "Selected No Box Engineer" not in titles
+
+
+def test_detail_card_prefers_job_detail_link_over_volatile_data_lid():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box" data-lid="session-token-xyz">
+            <div class="job-detail-header">
+              <a class="job-detail-info" href="/job_detail/stable999.html">Engineer 30-50K</a>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs?query=k8s",
+    )
+
+    # A volatile data-lid session token must not win over the stable /job_detail/
+    # id, or the duplicate-contact guard fails when the posting is reopened.
+    assert jobs[0].platform_job_id == "stable999"

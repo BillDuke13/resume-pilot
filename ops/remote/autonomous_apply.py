@@ -38,7 +38,7 @@ from resume_pilot.runner import build_job_decision_prompt, parse_monthly_salary_
 from resume_pilot.state import BudgetExceededError, DuplicateActionError, StateStore
 
 POLICY_ENV = "RESUME_PILOT_AUTONOMOUS_POLICY"
-SUCCESS_MARKERS = ("发送简历", "继续沟通", "沟通中", "聊天", "常用语")
+SUCCESS_MARKERS = ("发送简历", "继续沟通", "沟通中")
 PRE_CLICK_ABORT_PREFIXES = (
     "contact_button_unavailable:",
     "page_risk_before_click:",
@@ -227,6 +227,7 @@ def compact_profile_for_decision(
         "salary_expectation": _compact_profile_value(data.get("salary_expectation"), policy),
         "hard_requirements": _compact_profile_value(data.get("hard_requirements"), policy),
         "strong_match_signals": _compact_profile_value(data.get("strong_match_signals"), policy),
+        "risk_flags_to_watch": _compact_profile_value(data.get("risk_flags_to_watch"), policy),
         "autonomous_policy": data["autonomous_policy"],
     }
 
@@ -680,14 +681,14 @@ async def click_immediate_contact(
     fallback_navigation_used = False
     post_text = ""
     post_risks: list[dict[str, str]] = []
-    verified = False
+    markers_seen = False
     click_events: list[dict[str, Any]] = []
     for _ in range(20):
         await asyncio.sleep(1.0)
         post_text = await page_text(target)
         post_risks = visible_page_risk_payload(post_text)
-        verified = not post_risks and any(marker in post_text for marker in SUCCESS_MARKERS)
-        if verified or post_risks:
+        markers_seen = any(marker in post_text for marker in SUCCESS_MARKERS)
+        if markers_seen or post_risks:
             break
     raw_click_events = await cdp_evaluate(
         target.web_socket_debugger_url,
@@ -715,6 +716,9 @@ async def click_immediate_contact(
     trusted_click_reached_page = any(
         event.get("type") == "click" and event.get("trusted") for event in click_events
     )
+    # Require a trusted click on the contact control itself; generic conversation
+    # markers can already be present in site navigation before any effective click.
+    verified = not post_risks and markers_seen and trusted_contact_click_reached_page
     post_click_url = str(
         await cdp_evaluate(target.web_socket_debugger_url, "window.location.href") or ""
     )
@@ -1018,7 +1022,9 @@ async def main() -> int:
                 profile_summary=profile_summary,
             )
             if not keep_going:
-                return 0
+                # A paused stop needs manual takeover; only cap/complete may exit 0
+                # so cron/systemd treats an unfinished run as a failure.
+                return 2 if store.active_pauses() else 0
             if store.action_count(ApplicationAction.IMMEDIATE_CONTACT) >= policy.daily_cap:
                 emit(
                     "cap_reached",

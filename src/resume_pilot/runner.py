@@ -300,14 +300,19 @@ class ResumePilotRunner:
             )
             try:
                 details = contact_executor(job)
-            except HumanPauseRequired:
+            except HumanPauseRequired as exc:
                 # Raised only before the click is dispatched, so no platform action
-                # occurred; free the reserved budget slot for a later retry.
+                # occurred; free the reserved budget slot for a later retry and
+                # persist the abort reason so manual takeover has an audited pause.
                 self.state.release_contact(job_id)
                 self.state.finish_action_attempt(
                     attempt_id,
                     status="failed",
-                    details={"job_id": job.platform_job_id, "error": "pre_click_abort"},
+                    details={"job_id": job.platform_job_id, "error": exc.reason},
+                )
+                self.state.pause(
+                    exc.reason,
+                    details={"job_id": job.platform_job_id, **(exc.details or {})},
                 )
                 raise
             except Exception as exc:

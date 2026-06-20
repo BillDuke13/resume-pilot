@@ -243,14 +243,17 @@ _LIVE_CONTACT_DETAIL_HTML = (
 
 
 class _FakeButton:
-    def __init__(self, *, visible: bool = True):
+    def __init__(self, *, visible: bool = True, raise_on_click: bool = False):
         self._visible = visible
+        self._raise_on_click = raise_on_click
         self.clicked = False
 
     def is_visible(self, timeout=None) -> bool:
         return self._visible
 
     def click(self, timeout=None) -> None:
+        if self._raise_on_click:
+            raise RuntimeError("element is not clickable: detached from DOM")
         self.clicked = True
 
 
@@ -339,3 +342,19 @@ def test_live_contact_success_marker_must_be_visible_text():
 
     assert confirmed["post_click_verified"] is True
     assert confirmed["needs_manual_verification"] is False
+
+
+def test_live_contact_unclickable_button_is_pre_click_abort():
+    page = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话</div>",
+        buttons=[_FakeButton(visible=True, raise_on_click=True)],
+        body_text="继续沟通",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+
+    # A click that fails Playwright actionability sends no mouse event, so it must
+    # surface as a pre-click abort (the runner releases the reservation) rather
+    # than a post-click failure that would consume the daily cap.
+    with pytest.raises(HumanPauseRequired) as exc_info:
+        _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
+    assert exc_info.value.reason == "contact_button_unclickable"

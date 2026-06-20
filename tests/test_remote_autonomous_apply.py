@@ -836,3 +836,159 @@ def test_main_refuses_non_loopback_cdp_host(monkeypatch, tmp_path):
     assert rc == 2
     assert opened == []
     assert any("cdp_host_not_loopback" in p["details"] for p in module.store.active_pauses())
+
+
+class _RunningManager:
+    def __init__(self, _paths):
+        self.cdp_host = "127.0.0.1"
+        self.cdp_url = "http://127.0.0.1:9222"
+
+    def status(self):
+        return SimpleNamespace(
+            running=True, cdp_url=self.cdp_url, detail="ws://target", pid=1, browser="Chrome"
+        )
+
+
+async def _search_open_html(_url, *, settle_seconds):
+    html = '<a class="job-name" href="/job_detail/p1.html">Role 30-50K</a>'
+    return SimpleNamespace(web_socket_debugger_url="ws://target"), html, "Role listing"
+
+
+def _arrange_main_run(module, monkeypatch, tmp_path, fake_process_job):
+    monkeypatch.setattr(
+        module.AutonomousPolicy,
+        "load",
+        classmethod(lambda _cls, _paths: make_policy(module, tmp_path)),
+    )
+    monkeypatch.setattr(module, "load_profile", lambda _policy: ("Policy.", ["Kubernetes"]))
+    monkeypatch.setattr(module, "BrowserManager", _RunningManager)
+    monkeypatch.setattr(module, "open_html", _search_open_html)
+    monkeypatch.setattr(module, "process_job", fake_process_job)
+
+
+def test_main_returns_nonzero_when_a_job_pauses(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    async def fake_process_job(list_job, *, policy, profile_summary):
+        module.pause("page_risk_on_detail", title=list_job.title, url=list_job.detail_url)
+        return False
+
+    _arrange_main_run(module, monkeypatch, tmp_path, fake_process_job)
+
+    rc = asyncio.run(module.main())
+
+    # A paused per-job stop must exit nonzero so a cron/systemd runner alerts
+    # instead of treating an unfinished, manual-takeover run as success.
+    assert rc == 2
+    assert any("page_risk_on_detail" in p["details"] for p in module.store.active_pauses())
+
+
+def test_main_returns_zero_when_cap_stops_run(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    async def fake_process_job(_list_job, *, policy, profile_summary):
+        # Cap reached: stop the run without pausing (no manual takeover needed).
+        return False
+
+    _arrange_main_run(module, monkeypatch, tmp_path, fake_process_job)
+
+    rc = asyncio.run(module.main())
+
+    assert rc == 0
+    assert module.store.active_pauses() == []
+
+
+def _cdp_contact_eval(detail_url, events):
+    async def fake_cdp_evaluate(_web_socket_url, expression):
+        if expression == "window.location.href":
+            return detail_url
+        if expression == "window.__resumePilotClickEvents || []":
+            return events
+        return {
+            "ok": True,
+            "reason": "clickable_center_found",
+            "count": 1,
+            "redirect_url": "/web/geek/chat?id=x",
+            "x": 1,
+            "y": 2,
+        }
+
+    return fake_cdp_evaluate
+
+
+def _arrange_cdp_contact(module, monkeypatch, detail_url, events):
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_page_text(_target):
+        return "Engineer role\n继续沟通"
+
+    async def fake_bring_to_front(*_args):
+        return None
+
+    async def fake_click(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(module, "page_text", fake_page_text)
+    monkeypatch.setattr(module, "cdp_evaluate", _cdp_contact_eval(detail_url, events))
+    monkeypatch.setattr(module, "cdp_bring_to_front", fake_bring_to_front)
+    monkeypatch.setattr(module, "cdp_dispatch_mouse_click", fake_click)
+
+
+def test_cdp_contact_not_verified_without_trusted_contact_click(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+    # A success marker is present, but the only trusted click hit a non-contact control.
+    _arrange_cdp_contact(
+        module,
+        monkeypatch,
+        detail_url,
+        [{"type": "click", "trusted": True, "target": "A.btn btn-interest", "text": "感兴趣"}],
+    )
+
+    details = asyncio.run(
+        module.click_immediate_contact(
+            target, platform_job_id="boss:example", detail_url=detail_url
+        )
+    )
+
+    assert details["post_click_verified"] is False
+    assert details["needs_manual_verification"] is True
+
+
+def test_cdp_contact_verified_with_trusted_contact_click(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+    _arrange_cdp_contact(
+        module,
+        monkeypatch,
+        detail_url,
+        [{"type": "click", "trusted": True, "target": "div.btn-startchat", "text": "立即沟通"}],
+    )
+
+    details = asyncio.run(
+        module.click_immediate_contact(
+            target, platform_job_id="boss:example", detail_url=detail_url
+        )
+    )
+
+    assert details["post_click_verified"] is True
+    assert details["needs_manual_verification"] is False
+
+
+def test_compact_profile_includes_risk_flags_to_watch(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    policy = make_policy(module, tmp_path)
+    data = {
+        "candidate_positioning": "Senior SRE",
+        "risk_flags_to_watch": ["unverified compensation", "vague equity"],
+        "autonomous_policy": {"mode": "test"},
+    }
+
+    compacted = module.compact_profile_for_decision(data, policy)
+
+    # The candidate-specific risk conditions must reach the compacted LLM profile.
+    assert compacted["risk_flags_to_watch"] == ["unverified compensation", "vague equity"]

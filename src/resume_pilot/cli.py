@@ -54,8 +54,6 @@ POST_CONTACT_SUCCESS_MARKERS = (
     "发送简历",
     "继续沟通",
     "沟通中",
-    "聊天",
-    "常用语",
 )
 ALLOWED_BOSS_HOSTS = {
     "zhipin.com",
@@ -530,7 +528,17 @@ def _click_unique_live_contact(
         )
 
     before_url = page.url
-    visible_buttons[0].click(timeout=10_000)
+    try:
+        visible_buttons[0].click(timeout=10_000)
+    except Exception as exc:
+        # Playwright runs actionability checks before dispatching the click, so a
+        # failure here means no mouse event was sent. Surface it as a pre-click
+        # abort (release the reservation) instead of a post-click failure that
+        # would consume the daily cap and dedupe slot.
+        raise HumanPauseRequired(
+            "contact_button_unclickable",
+            {"job_id": platform_job_id, "error": str(exc)},
+        ) from exc
     page.wait_for_timeout(1_500)
     post_click_html = _wait_for_live_page_html(page)
     post_click_risks = adapter.page_risks(post_click_html)

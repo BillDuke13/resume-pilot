@@ -79,10 +79,11 @@ def _selected_detail_job_id(panel: Tag) -> str | None:
     """Return the platform job id carried by a selected detail panel, if any.
 
     Scoped to the panel so sibling recommendation links cannot leak their ids in.
-    Prefers explicit platform id attributes, then a /job_detail/ link inside it.
+    Prefers stable ids — data-job-id/data-jobid, then a /job_detail/ link — and
+    only falls back to the volatile data-lid token last.
     """
     for element in (panel, *panel.find_all(True)):
-        for attr in ("data-job-id", "data-jobid", "data-lid"):
+        for attr in ("data-job-id", "data-jobid"):
             value = element.get(attr)
             if value:
                 return str(value)
@@ -90,6 +91,12 @@ def _selected_detail_job_id(panel: Tag) -> str | None:
         job_id = _detail_url_job_id(str(anchor["href"]))
         if job_id:
             return job_id
+    # data-lid is a volatile list/session token; use it only as a last resort so
+    # reopening the same posting from another search does not change the id.
+    for element in (panel, *panel.find_all(True)):
+        value = element.get("data-lid")
+        if value:
+            return str(value)
     return None
 
 
@@ -180,13 +187,11 @@ class BossHtmlAdapter:
     def _extract_selected_detail_card(
         self, soup: BeautifulSoup, *, source_url: str
     ) -> JobCard | None:
-        # Scope immediate-contact detection to the selected job's box. The outer
-        # ".job-detail-container" can nest recommendation cards whose own
-        # "立即沟通" button would otherwise be read as the selected job's, leading
-        # to a contact click recorded against the wrong posting.
-        detail = soup.select_one(".job-detail-box") or soup.select_one(
-            ".job-detail-container"
-        )
+        # Only the selected job's own box is authoritative for contactability and
+        # id. The outer ".job-detail-container" can nest recommendation cards whose
+        # "立即沟通" button (and job id/link) would otherwise be borrowed for the
+        # selected job, recording a contact against the wrong posting.
+        detail = soup.select_one(".job-detail-box")
         if not detail:
             return None
         raw_text = normalize_text(detail.get_text(" "))
