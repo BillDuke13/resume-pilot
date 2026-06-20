@@ -180,7 +180,13 @@ class BossHtmlAdapter:
     def _extract_selected_detail_card(
         self, soup: BeautifulSoup, *, source_url: str
     ) -> JobCard | None:
-        detail = soup.select_one(".job-detail-box, .job-detail-container")
+        # Scope immediate-contact detection to the selected job's box. The outer
+        # ".job-detail-container" can nest recommendation cards whose own
+        # "立即沟通" button would otherwise be read as the selected job's, leading
+        # to a contact click recorded against the wrong posting.
+        detail = soup.select_one(".job-detail-box") or soup.select_one(
+            ".job-detail-container"
+        )
         if not detail:
             return None
         raw_text = normalize_text(detail.get_text(" "))

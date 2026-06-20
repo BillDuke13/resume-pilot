@@ -357,3 +357,38 @@ def test_detail_card_id_stable_across_different_search_urls():
     # The same posting opened from two different search keywords must dedupe to one id,
     # so the duplicate-contact guard cannot be bypassed by reopening from another query.
     assert from_k8s[0].platform_job_id == from_sre[0].platform_job_id
+
+
+def test_detail_page_selected_in_conversation_does_not_borrow_recommendation_button():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Selected Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">继续沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+          <div class="recommend-list">
+            <div class="job-card-wrapper">
+              <a class="job-name" href="/job_detail/reco1.html">Recommended One 8-10K</a>
+              <a class="op-btn">立即沟通</a>
+            </div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/selected.html",
+    )
+
+    # The selected job is already in conversation (its box has 继续沟通, not 立即沟通),
+    # so it must not be surfaced as the contactable detail card by borrowing the
+    # recommendation card's 立即沟通 button — that would record a contact against the
+    # wrong posting.
+    ids = {job.platform_job_id for job in jobs}
+    titles = {job.title for job in jobs}
+    assert "selected" not in ids
+    assert "Selected Engineer" not in titles

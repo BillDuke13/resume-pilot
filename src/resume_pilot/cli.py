@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 
 from resume_pilot import __version__
 from resume_pilot.boss import BossHtmlAdapter, HumanPauseRequired
-from resume_pilot.browser import BrowserManager, fetch_cdp_version, find_browser_binary
+from resume_pilot.browser import (
+    LOOPBACK_CDP_HOSTS,
+    BrowserManager,
+    fetch_cdp_version,
+    find_browser_binary,
+)
 from resume_pilot.config import (
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_DAILY_CAP,
@@ -443,7 +448,13 @@ def _execute_live_run(
     profile_summary: str | None,
 ):
     _validate_boss_source_url(source_url)
-    status = BrowserManager(paths).status()
+    manager = BrowserManager(paths)
+    if manager.cdp_host not in LOOPBACK_CDP_HOSTS:
+        raise HumanPauseRequired(
+            "cdp_host_not_loopback",
+            {"cdp_host": manager.cdp_host, "cdp_url": manager.cdp_url},
+        )
+    status = manager.status()
     if not status.running:
         raise HumanPauseRequired(
             "managed_browser_not_running",
@@ -503,12 +514,14 @@ def _click_unique_live_contact(
 
     pattern = re.compile(r"^\s*立即沟通\s*$")
     visible_buttons = []
-    for selector in ("a", "button"):
-        locator = page.locator(selector, has_text=pattern)
-        for index in range(locator.count()):
-            item = locator.nth(index)
-            if item.is_visible(timeout=1_000):
-                visible_buttons.append(item)
+    # Match the same control shapes the adapter accepts in button_labels()
+    # (anchors, buttons, and role="button" elements); a single comma selector
+    # de-duplicates via querySelectorAll so an element is never counted twice.
+    locator = page.locator("a, button, [role=button]", has_text=pattern)
+    for index in range(locator.count()):
+        item = locator.nth(index)
+        if item.is_visible(timeout=1_000):
+            visible_buttons.append(item)
 
     if len(visible_buttons) != 1:
         raise HumanPauseRequired(
@@ -521,8 +534,12 @@ def _click_unique_live_contact(
     page.wait_for_timeout(1_500)
     post_click_html = _wait_for_live_page_html(page)
     post_click_risks = adapter.page_risks(post_click_html)
+    # Confirm success from the rendered, visible body text only. Raw HTML can
+    # carry success markers inside hidden templates, scripts, or global nav,
+    # which would skip the manual-verification pause after an ineffective click.
+    post_click_text = _live_visible_text(page)
     post_click_verified = not post_click_risks and any(
-        marker in post_click_html for marker in POST_CONTACT_SUCCESS_MARKERS
+        marker in post_click_text for marker in POST_CONTACT_SUCCESS_MARKERS
     )
     return {
         "clicked_label": "立即沟通",
@@ -551,6 +568,13 @@ def _read_live_page_text(url: str | None) -> str:
             browser.close()
         if playwright:
             playwright.stop()
+
+
+def _live_visible_text(page) -> str:
+    try:
+        return page.locator("body").inner_text(timeout=10_000)
+    except Exception:
+        return ""
 
 
 def _wait_for_live_page_html(page) -> str:

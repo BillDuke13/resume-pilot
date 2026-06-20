@@ -4,8 +4,13 @@ import json
 
 import pytest
 
-from resume_pilot.boss import HumanPauseRequired
-from resume_pilot.cli import _validate_boss_source_url, _wait_for_live_page_html, main
+from resume_pilot.boss import BossHtmlAdapter, HumanPauseRequired
+from resume_pilot.cli import (
+    _click_unique_live_contact,
+    _validate_boss_source_url,
+    _wait_for_live_page_html,
+    main,
+)
 
 
 class FakePage:
@@ -205,3 +210,132 @@ def test_run_over_saved_html_fixture_does_not_crash(tmp_path, capsys):
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert "discovered" in output
+
+
+def test_live_execute_rejects_non_loopback_cdp_host(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("RESUME_PILOT_CDP_HOST", "0.0.0.0")
+
+    exit_code = main(
+        [
+            "--state-db",
+            str(tmp_path / "state.sqlite"),
+            "run",
+            "--execute",
+            "--confirm-live-contact",
+            "--source-url",
+            "https://www.zhipin.com/web/geek/jobs",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 3
+    assert output["paused"] is True
+    assert "cdp_host_not_loopback" in output["reason"]
+
+
+_LIVE_CONTACT_DETAIL_HTML = (
+    "<div class='job-detail-container'><div class='job-detail-box'>"
+    "<div class='job-detail-header'>"
+    "<div class='job-detail-info'>Test Engineer 30-50K</div>"
+    "<div class='job-detail-op'><a class='op-btn'>立即沟通</a></div>"
+    "</div><div class='job-detail-body'>职位描述 Python</div></div></div>"
+)
+
+
+class _FakeButton:
+    def __init__(self, *, visible: bool = True):
+        self._visible = visible
+        self.clicked = False
+
+    def is_visible(self, timeout=None) -> bool:
+        return self._visible
+
+    def click(self, timeout=None) -> None:
+        self.clicked = True
+
+
+class _FakeSelectorLocator:
+    def __init__(self, items):
+        self._items = items
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def nth(self, index):
+        return self._items[index]
+
+
+class _FakeBodyLocator:
+    def __init__(self, text: str):
+        self._text = text
+
+    def inner_text(self, timeout=None) -> str:
+        return self._text
+
+
+class FakeContactPage:
+    def __init__(self, *, post_html: str, buttons, body_text: str, url: str):
+        self._snapshots = [_LIVE_CONTACT_DETAIL_HTML, post_html]
+        self.url = url
+        self._buttons = buttons
+        self._body_text = body_text
+        self.locator_selectors: list[str] = []
+        self.waits = 0
+
+    def content(self) -> str:
+        if len(self._snapshots) > 1:
+            return self._snapshots.pop(0)
+        return self._snapshots[0]
+
+    def wait_for_timeout(self, _milliseconds: int) -> None:
+        self.waits += 1
+
+    def locator(self, selector: str, has_text=None):
+        self.locator_selectors.append(selector)
+        if selector == "body":
+            return _FakeBodyLocator(self._body_text)
+        return _FakeSelectorLocator(self._buttons)
+
+
+def test_live_contact_locator_includes_role_buttons():
+    page = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话 继续沟通</div>",
+        buttons=[_FakeButton(visible=True)],
+        body_text="继续沟通",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+
+    result = _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
+
+    # The adapter accepts role="button" controls in button_labels(); the live click
+    # locator must scan the same shapes so an accepted control is actually clicked.
+    assert "a, button, [role=button]" in page.locator_selectors
+    assert result["job_id"] == "test123"
+
+
+def test_live_contact_success_marker_must_be_visible_text():
+    hidden_marker = FakeContactPage(
+        post_html="<div class='job-detail'><script>聊天</script></div>",
+        buttons=[_FakeButton(visible=True)],
+        body_text="对话尚未开始",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+
+    result = _click_unique_live_contact(hidden_marker, BossHtmlAdapter(), "test123")
+
+    # "聊天" appears only in a hidden script, not the visible body, so success must
+    # not be inferred and a manual-verification pause is required.
+    assert result["post_click_verified"] is False
+    assert result["needs_manual_verification"] is True
+
+    visible_marker = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话</div>",
+        buttons=[_FakeButton(visible=True)],
+        body_text="继续沟通 常用语",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+
+    confirmed = _click_unique_live_contact(visible_marker, BossHtmlAdapter(), "test123")
+
+    assert confirmed["post_click_verified"] is True
+    assert confirmed["needs_manual_verification"] is False
