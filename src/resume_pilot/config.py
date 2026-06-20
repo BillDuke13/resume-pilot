@@ -62,10 +62,8 @@ def default_cdp_url() -> str:
 
 
 def ensure_private_dir(path: Path) -> Path:
-    existed = path.exists()
     path.mkdir(parents=True, exist_ok=True)
-    if not existed or path.name == APP_NAME:
-        path.chmod(stat.S_IRWXU)
+    path.chmod(stat.S_IRWXU)
     return path
 
 

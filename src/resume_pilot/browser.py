@@ -26,6 +26,7 @@ BROWSER_CANDIDATES = (
     "google-chrome-stable",
     "chrome",
 )
+LOOPBACK_CDP_HOSTS = ("127.0.0.1", "::1", "localhost")
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,12 @@ class BrowserManager:
 
     def start(self) -> BrowserStatus:
         self.paths.ensure_private()
+        if self.cdp_host not in LOOPBACK_CDP_HOSTS:
+            return BrowserStatus(
+                running=False,
+                cdp_url=self.cdp_url,
+                detail=f"Refusing to start CDP on non-loopback host {self.cdp_host!r}",
+            )
         current = self.status()
         if current.running:
             return current

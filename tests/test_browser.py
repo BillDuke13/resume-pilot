@@ -91,3 +91,18 @@ def test_browser_manager_honors_cdp_env_overrides(tmp_path, monkeypatch):
 
     assert manager.cdp_port == 9333
     assert manager.cdp_url == "http://127.0.0.1:9333"
+
+
+def test_start_refuses_non_loopback_cdp_host(tmp_path, monkeypatch):
+    launched: list[str] = []
+    monkeypatch.setattr(
+        "resume_pilot.browser.find_browser_binary",
+        lambda: (launched.append("x"), "/usr/bin/chromium")[1],
+    )
+
+    manager = BrowserManager(_paths(tmp_path), cdp_host="0.0.0.0")
+    status = manager.start()
+
+    assert status.running is False
+    assert "non-loopback" in (status.detail or "")
+    assert launched == []
