@@ -155,17 +155,23 @@ class ResumePilotRunner:
                     summary = _record_decision_summary(summary, salary_gate_decision)
                     continue
 
-            decision = self._decide(job, profile_summary=profile_summary)
-            self.state.record_job_decision(job_id, decision)
-            summary = _record_decision_summary(summary, decision)
+            try:
+                decision = self._decide(job, profile_summary=profile_summary)
+            except InvalidLlmResponseError as exc:
+                self.state.pause(
+                    "invalid_llm_response",
+                    details={"job_id": job.platform_job_id, "error": str(exc)},
+                )
+                raise HumanPauseRequired(
+                    "invalid_llm_response",
+                    {"job_id": job.platform_job_id, "error": str(exc)},
+                ) from exc
 
-            if decision.decision != LlmJobDecisionValue.APPLY:
-                continue
-
-            if dry_run:
-                continue
-
-            if decision.confidence < MIN_APPLY_CONFIDENCE or decision.risk_flags:
+            if (
+                not dry_run
+                and decision.decision == LlmJobDecisionValue.APPLY
+                and (decision.confidence < MIN_APPLY_CONFIDENCE or decision.risk_flags)
+            ):
                 self.state.pause(
                     "apply_decision_not_safe",
                     details={
@@ -182,6 +188,15 @@ class ResumePilotRunner:
                         "risk_flags": decision.risk_flags,
                     },
                 )
+
+            self.state.record_job_decision(job_id, decision)
+            summary = _record_decision_summary(summary, decision)
+
+            if decision.decision != LlmJobDecisionValue.APPLY:
+                continue
+
+            if dry_run:
+                continue
 
             if self.state.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT):
                 self.state.pause(

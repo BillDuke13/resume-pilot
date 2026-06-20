@@ -401,3 +401,50 @@ def test_indeterminate_click_failure_keeps_reservation(tmp_path):
 
     job = store.get_job_by_platform_id("one")
     assert store.has_action(job["id"], ApplicationAction.IMMEDIATE_CONTACT) is True
+
+
+class MalformedLlmClient:
+    def run_json(self, _prompt: str) -> str:
+        return "this is not valid json output"
+
+
+def test_unsafe_live_apply_is_not_persisted_as_approved(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    runner = ResumePilotRunner(
+        state=store,
+        llm_client=RiskyApplyLlmClient(),
+        adapter=BossHtmlAdapter(),
+    )
+
+    with pytest.raises(HumanPauseRequired):
+        runner.evaluate_static_html(
+            _SINGLE_CONTACT_HTML,
+            source_url="https://www.zhipin.com/web/geek/job",
+            dry_run=False,
+            daily_cap=1,
+            contact_executor=lambda _job: {},
+        )
+
+    job = store.get_job_by_platform_id("one")
+    assert job["status"] != "approved"
+
+
+def test_invalid_llm_output_becomes_audited_pause(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    runner = ResumePilotRunner(
+        state=store,
+        llm_client=MalformedLlmClient(),
+        adapter=BossHtmlAdapter(),
+    )
+
+    with pytest.raises(HumanPauseRequired) as exc_info:
+        runner.evaluate_static_html(
+            _SINGLE_CONTACT_HTML,
+            source_url="https://www.zhipin.com/web/geek/job",
+            dry_run=False,
+            daily_cap=1,
+            contact_executor=lambda _job: {},
+        )
+
+    assert str(exc_info.value) == "invalid_llm_response"
+    assert any(p["reason"] == "invalid_llm_response" for p in store.active_pauses())

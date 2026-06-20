@@ -551,6 +551,11 @@ async def click_immediate_contact(
     if detail_url and not target_url_matches(detail_url, current_url, "zhipin.com"):
         await cdp_navigate(target.web_socket_debugger_url, detail_url)
         await asyncio.sleep(3.0)
+        post_nav_url = str(
+            await cdp_evaluate(target.web_socket_debugger_url, "window.location.href") or ""
+        )
+        if not target_url_matches(detail_url, post_nav_url, "zhipin.com"):
+            raise RuntimeError(f"contact_button_not_safe:navigation_drift:{post_nav_url}")
 
     before_text = await page_text(target)
     risks = visible_page_risk_payload(before_text)

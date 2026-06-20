@@ -669,3 +669,44 @@ def test_bootstrap_installs_iproute2_for_ss():
         Path(__file__).resolve().parents[1] / "ops/remote/bootstrap_debian.sh"
     ).read_text(encoding="utf-8")
     assert "iproute2" in bootstrap
+
+
+def test_navigation_drift_aborts_before_click(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+    navigated = []
+    urls = iter(
+        [
+            "https://www.zhipin.com/web/geek/jobs",
+            "https://www.zhipin.com/job_detail/other.html",
+        ]
+    )
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_cdp_evaluate(_ws, expression):
+        if expression == "window.location.href":
+            return next(urls)
+        return {}
+
+    async def fake_navigate(*args):
+        navigated.append(args)
+
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(module, "cdp_evaluate", fake_cdp_evaluate)
+    monkeypatch.setattr(module, "cdp_navigate", fake_navigate)
+
+    try:
+        asyncio.run(
+            module.click_immediate_contact(
+                target, platform_job_id="boss:example", detail_url=detail_url
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc).startswith("contact_button_not_safe:navigation_drift")
+    else:
+        raise AssertionError("expected RuntimeError on navigation drift")
+
+    assert len(navigated) == 1

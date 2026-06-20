@@ -68,7 +68,10 @@ def ensure_private_dir(path: Path) -> Path:
 
 
 def ensure_private_parent(path: Path) -> Path:
-    ensure_private_dir(path.parent)
+    parent = path.parent
+    if not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
+        parent.chmod(stat.S_IRWXU)
     return path
 
 
