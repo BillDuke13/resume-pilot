@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 from resume_pilot.config import (
     DEFAULT_CDP_HOST,
@@ -133,6 +134,9 @@ class BrowserManager:
         pid = self._read_pid()
         if pid is None:
             return self.status()
+        if not self._pid_is_managed_browser(pid):
+            self.paths.browser_pid.unlink(missing_ok=True)
+            return self.status()
         with suppress(ProcessLookupError):
             os.kill(pid, signal.SIGTERM)
         for _ in range(20):
@@ -153,6 +157,22 @@ class BrowserManager:
         except FileNotFoundError:
             return None
         return int(text) if text.isdigit() else None
+
+    def _pid_is_managed_browser(self, pid: int) -> bool:
+        """Confirm the stored PID still belongs to this profile's browser.
+
+        Guards against killing an unrelated process that reused a stale PID. The
+        check reads ``/proc/<pid>/cmdline`` and requires the managed profile path
+        to appear in the launch arguments. When the command line cannot be read
+        (process gone, no permission, or no procfs), it is treated as not managed,
+        so the caller clears the stale pid file instead of sending a signal.
+        """
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+            return False
+        arguments = cmdline.decode("utf-8", errors="replace")
+        return str(self.paths.chrome_profile) in arguments
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:

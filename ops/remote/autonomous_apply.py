@@ -39,6 +39,22 @@ from resume_pilot.state import StateStore
 POLICY_ENV = "RESUME_PILOT_AUTONOMOUS_POLICY"
 SUCCESS_MARKERS = ("发送简历", "继续沟通", "沟通中", "聊天", "常用语")
 JOB_DETAIL_PATH_RE = re.compile(r"/job_detail/[^/?#]+")
+ALLOWED_BOSS_HOSTS = {
+    "zhipin.com",
+    "www.zhipin.com",
+    "bosszhipin.com",
+    "www.bosszhipin.com",
+}
+
+
+def is_allowed_boss_detail_url(url: str | None) -> bool:
+    if not url:
+        return False
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc not in ALLOWED_BOSS_HOSTS:
+        return False
+    return bool(JOB_DETAIL_PATH_RE.search(parsed.path))
+
 
 adapter = BossHtmlAdapter()
 paths = AppPaths.defaults()
@@ -712,31 +728,6 @@ async def click_immediate_contact(
                 },
                 "playwright_click": playwright_details,
             }
-    redirect_url = result.get("redirect_url")
-    fallback_url = ""
-    if (
-        not verified
-        and not post_risks
-        and not trusted_click_reached_page
-        and not trusted_wrong_click_reached_page
-        and isinstance(redirect_url, str)
-        and redirect_url
-    ):
-        fallback_navigation_used = True
-        await cdp_navigate(
-            target.web_socket_debugger_url,
-            urllib.parse.urljoin("https://www.zhipin.com", redirect_url),
-        )
-        for _ in range(10):
-            await asyncio.sleep(1.0)
-            post_text = await page_text(target)
-            post_risks = visible_page_risk_payload(post_text)
-            verified = not post_risks and any(marker in post_text for marker in SUCCESS_MARKERS)
-            if verified or post_risks:
-                break
-        fallback_url = str(
-            await cdp_evaluate(target.web_socket_debugger_url, "window.location.href") or ""
-        )
     return {
         "clicked_label": "立即沟通",
         "job_id": platform_job_id,
@@ -753,7 +744,6 @@ async def click_immediate_contact(
             "y": result.get("y"),
             "redirect_url": result.get("redirect_url"),
             "post_click_url": post_click_url,
-            "fallback_url": fallback_url,
         },
         "playwright_click": playwright_details,
     }
@@ -777,8 +767,8 @@ async def process_job(
             inserted=inserted,
         )
         return True
-    if not list_job.detail_url or not JOB_DETAIL_PATH_RE.search(list_job.detail_url):
-        emit("skip", title=list_job.title, salary=list_job.salary, reason="missing_detail_url")
+    if not is_allowed_boss_detail_url(list_job.detail_url):
+        emit("skip", title=list_job.title, salary=list_job.salary, reason="unsupported_detail_url")
         return True
     detail_target, detail_html, detail_text = await open_html(
         list_job.detail_url,
@@ -838,7 +828,7 @@ async def process_job(
 
     if decision.decision != LlmJobDecisionValue.APPLY:
         return True
-    if decision.confidence < 0.75:
+    if decision.confidence < 0.75 or decision.risk_flags:
         record_skip(
             job_id,
             (
@@ -899,8 +889,9 @@ async def process_job(
 
     details = {**details, "attempt_id": attempt_id}
     store.finish_action_attempt(attempt_id, status="clicked", details=details)
+    store.record_contact(job_id, daily_cap=policy.daily_cap, dry_run=False, details=details)
+    store.finish_action_attempt(attempt_id, status="recorded", details=details)
     if details.get("needs_manual_verification"):
-        store.finish_action_attempt(attempt_id, status="failed", details=details)
         pause(
             "contact_click_needs_manual_verification",
             title=job.title,
@@ -908,8 +899,6 @@ async def process_job(
             details=details,
         )
         return False
-    store.record_contact(job_id, daily_cap=policy.daily_cap, dry_run=False, details=details)
-    store.finish_action_attempt(attempt_id, status="recorded", details=details)
     today = store.action_count(ApplicationAction.IMMEDIATE_CONTACT)
     emit("contacted", today=today, title=job.title, salary=job.salary, post_url=job.detail_url)
     return today < policy.daily_cap

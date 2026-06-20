@@ -104,3 +104,37 @@ def test_claude_code_timeout_error_does_not_include_prompt(monkeypatch):
     message = str(exc_info.value)
     assert "timed out after 3 seconds" in message
     assert secret_prompt not in message
+
+
+def test_parse_job_decision_rejects_boolean_confidence():
+    with pytest.raises(InvalidLlmResponseError):
+        parse_job_decision(
+            """
+            {
+              "decision": "apply",
+              "confidence": true,
+              "reason": "Boolean confidence must not satisfy the numeric gate",
+              "resume_match_signals": [],
+              "risk_flags": []
+            }
+            """
+        )
+
+
+def test_run_json_passes_prompt_via_stdin_not_arguments(monkeypatch):
+    secret_prompt = "private resume profile must never reach process arguments"
+    client = ClaudeCodeClient()
+    monkeypatch.setattr(ClaudeCodeClient, "available", lambda _self: True)
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["input"] = kwargs.get("input")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    client.run_json(secret_prompt)
+
+    assert secret_prompt not in captured["args"]
+    assert captured["input"] == secret_prompt

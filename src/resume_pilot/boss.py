@@ -69,9 +69,9 @@ def _stable_job_id(*parts: str | None) -> str:
 
 
 def _split_title_salary(text: str) -> tuple[str, str | None]:
-    tokens = text.split()
-    if len(tokens) >= 2 and tokens[-1].upper().endswith("K"):
-        return " ".join(tokens[:-1]), tokens[-1]
+    match = re.search(r"\s+(\d{1,3}(?:-\d{1,3})?K(?:·\d{1,2}薪)?)\s*$", text, re.IGNORECASE)
+    if match:
+        return text[: match.start()].strip(), match.group(1)
     return text, None
 
 
@@ -171,7 +171,7 @@ class BossHtmlAdapter:
             or "Unknown company"
         )
         location = _first_text(detail, (".location", ".job-area", ".company-location"))
-        platform_job_id = _stable_job_id(title, company, source_url, raw_text[:512])
+        platform_job_id = _stable_job_id(title, company, source_url)
         return JobCard(
             platform_job_id=platform_job_id,
             title=title,

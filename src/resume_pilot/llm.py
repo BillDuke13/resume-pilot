@@ -95,7 +95,12 @@ def parse_job_decision(raw_output: str) -> LlmJobDecision:
         raise InvalidLlmResponseError(f"Unsupported job decision: {decision_text}") from exc
 
     confidence = payload.get("confidence")
-    if not isinstance(confidence, int | float) or confidence < 0 or confidence > 1:
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, int | float)
+        or confidence < 0
+        or confidence > 1
+    ):
         raise InvalidLlmResponseError("Field 'confidence' must be a number from 0 to 1")
 
     return LlmJobDecision(
@@ -136,7 +141,6 @@ class ClaudeCodeClient:
                 [
                     self.executable,
                     "-p",
-                    prompt,
                     "--model",
                     self.model,
                     "--output-format",
@@ -145,6 +149,7 @@ class ClaudeCodeClient:
                 check=False,
                 capture_output=True,
                 text=True,
+                input=prompt,
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:

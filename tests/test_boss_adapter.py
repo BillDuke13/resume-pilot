@@ -144,3 +144,56 @@ def test_extract_selected_job_detail_when_list_uses_javascript_links():
     assert jobs[0].title == "Platform Reliability Engineer"
     assert jobs[0].salary == "35-50K"
     assert jobs[0].company == "Example Tech"
+
+
+def test_detail_card_parses_annual_pay_salary_suffix():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Senior Backend Engineer 30-60K·15薪</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs",
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Senior Backend Engineer"
+    assert jobs[0].salary == "30-60K·15薪"
+
+
+def test_detail_card_job_id_is_stable_across_volatile_page_text():
+    adapter = BossHtmlAdapter()
+
+    def detail_html(transient: str) -> str:
+        return f"""
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Platform Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python {transient}</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """
+
+    first = adapter.extract_job_cards(
+        detail_html("在线"),
+        source_url="https://www.zhipin.com/web/geek/jobs",
+    )
+    second = adapter.extract_job_cards(
+        detail_html("刚刚活跃 验证码已通过"),
+        source_url="https://www.zhipin.com/web/geek/jobs",
+    )
+
+    assert first[0].platform_job_id == second[0].platform_job_id

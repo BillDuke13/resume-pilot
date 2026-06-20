@@ -392,3 +392,158 @@ def test_model_skip_is_not_promoted_by_ignored_risk_patterns(monkeypatch, tmp_pa
     assert sanitized.decision == module.LlmJobDecisionValue.SKIP
     assert sanitized.risk_flags == []
     assert "ignored-model-risk" not in sanitized.reason
+
+
+def test_is_allowed_boss_detail_url_rejects_foreign_and_insecure_hosts(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    assert module.is_allowed_boss_detail_url("https://www.zhipin.com/job_detail/abc.html")
+    assert not module.is_allowed_boss_detail_url("https://evil.example/job_detail/abc?zhipin.com")
+    assert not module.is_allowed_boss_detail_url("http://www.zhipin.com/job_detail/abc.html")
+    assert not module.is_allowed_boss_detail_url("https://www.zhipin.com/web/geek/jobs")
+    assert not module.is_allowed_boss_detail_url(None)
+
+
+def test_apply_with_risk_flags_is_not_contacted(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    clicked = []
+
+    class FakeClient:
+        def run_json(self, _prompt):
+            return json.dumps(
+                {
+                    "decision": "apply",
+                    "confidence": 0.9,
+                    "reason": "Model surfaced an unresolved risk",
+                    "resume_match_signals": ["K8s"],
+                    "risk_flags": ["unverified compensation"],
+                }
+            )
+
+    async def fake_open_html(_url, *, settle_seconds):
+        return (
+            SimpleNamespace(web_socket_debugger_url="ws://target"),
+            "<html><body>立即沟通 Role detail</body></html>",
+            "Role detail",
+        )
+
+    async def fake_click(*_args, **_kwargs):
+        clicked.append(True)
+        return {"needs_manual_verification": False}
+
+    monkeypatch.setattr(module, "client", FakeClient())
+    monkeypatch.setattr(module, "open_html", fake_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(make_job(module), policy=make_policy(module, tmp_path),
+                           profile_summary="Private policy.")
+    )
+
+    assert keep_going is True
+    assert clicked == []
+    job = module.store.get_job_by_platform_id("boss:sample-k8s")
+    assert not module.store.has_action(job["id"], module.ApplicationAction.IMMEDIATE_CONTACT)
+    assert module.latest_job_decision_reason(job["id"]).startswith("apply_decision_not_safe")
+
+
+def test_unverified_click_records_contact_to_preserve_dedupe(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    class FakeClient:
+        def run_json(self, _prompt):
+            return json.dumps(
+                {
+                    "decision": "apply",
+                    "confidence": 0.95,
+                    "reason": "Strong candidate-side match",
+                    "resume_match_signals": ["K8s"],
+                    "risk_flags": [],
+                }
+            )
+
+    async def fake_open_html(_url, *, settle_seconds):
+        return (
+            SimpleNamespace(web_socket_debugger_url="ws://target"),
+            "<html><body>立即沟通 Role detail</body></html>",
+            "Role detail",
+        )
+
+    async def fake_click(*_args, **_kwargs):
+        return {
+            "clicked_label": "立即沟通",
+            "post_click_verified": False,
+            "needs_manual_verification": True,
+        }
+
+    monkeypatch.setattr(module, "client", FakeClient())
+    monkeypatch.setattr(module, "open_html", fake_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(make_job(module), policy=make_policy(module, tmp_path),
+                           profile_summary="Private policy.")
+    )
+
+    assert keep_going is False
+    job = module.store.get_job_by_platform_id("boss:sample-k8s")
+    assert module.store.has_action(job["id"], module.ApplicationAction.IMMEDIATE_CONTACT)
+
+
+def test_unverified_cdp_click_does_not_navigate_redirect_url(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    detail_url = "https://www.zhipin.com/job_detail/example.html"
+    target = SimpleNamespace(web_socket_debugger_url="ws://target")
+    navigate_calls = []
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_page_text(_target):
+        return "Senior platform engineer\n立即沟通"
+
+    async def fake_cdp_evaluate(_web_socket_url, expression):
+        if expression == "window.location.href":
+            return detail_url
+        if expression == "window.__resumePilotClickEvents || []":
+            return []
+        return {
+            "ok": True,
+            "reason": "clickable_center_found",
+            "count": 1,
+            "redirect_url": "/web/geek/chat?id=ok",
+            "x": 262,
+            "y": 223,
+        }
+
+    async def fake_bring_to_front(*_args):
+        return None
+
+    async def fake_click(*_args, **_kwargs):
+        return None
+
+    async def fake_playwright_click(_url):
+        return {"ok": False, "post_click_verified": False, "post_click_risks": []}
+
+    async def fake_navigate(*args):
+        navigate_calls.append(args)
+
+    monkeypatch.setattr(module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(module, "page_text", fake_page_text)
+    monkeypatch.setattr(module, "cdp_evaluate", fake_cdp_evaluate)
+    monkeypatch.setattr(module, "cdp_bring_to_front", fake_bring_to_front)
+    monkeypatch.setattr(module, "cdp_dispatch_mouse_click", fake_click)
+    monkeypatch.setattr(module, "playwright_click_immediate_contact", fake_playwright_click)
+    monkeypatch.setattr(module, "cdp_navigate", fake_navigate)
+
+    details = asyncio.run(
+        module.click_immediate_contact(
+            target,
+            platform_job_id="boss:example",
+            detail_url=detail_url,
+        )
+    )
+
+    assert navigate_calls == []
+    assert details["fallback_navigation_used"] is False
+    assert details["needs_manual_verification"] is True

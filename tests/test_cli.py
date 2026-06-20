@@ -63,3 +63,22 @@ def test_live_execute_source_url_must_be_boss_job_url():
 
     with pytest.raises(HumanPauseRequired):
         _validate_boss_source_url("https://example.com/web/geek/jobs")
+
+
+def test_live_execute_rejects_decision_fixture(tmp_path, capsys):
+    exit_code = main(
+        [
+            "--state-db",
+            str(tmp_path / "state.sqlite"),
+            "run",
+            "--execute",
+            "--confirm-live-contact",
+            "--decision-fixture",
+            "apply",
+            "--source-url",
+            "https://www.zhipin.com/web/geek/jobs",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "--decision-fixture" in capsys.readouterr().err

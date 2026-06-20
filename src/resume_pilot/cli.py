@@ -278,6 +278,12 @@ def cmd_profile_extract(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     paths = _paths(args)
     state = StateStore(paths.state_db)
+    if args.decision_fixture and not args.dry_run:
+        print(
+            "Live --execute cannot use --decision-fixture; it requires a real LLM decision.",
+            file=sys.stderr,
+        )
+        return 2
     if args.decision_fixture:
         client = FixedJsonDecisionClient(LlmJobDecisionValue(args.decision_fixture))
     else:
