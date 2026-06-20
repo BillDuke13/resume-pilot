@@ -718,7 +718,7 @@ def test_already_contacted_job_is_skipped_before_opening_detail(monkeypatch, tmp
     module = load_remote_module(monkeypatch, tmp_path)
     job = make_job(module)
     job_id, _ = module.store.upsert_job(job)
-    module.store.reserve_contact(job_id, daily_cap=150)
+    module.store.record_contact(job_id, daily_cap=150)
 
     opened = []
 
@@ -1024,7 +1024,7 @@ def test_cdp_precheck_failure_is_pre_click_abort(monkeypatch, tmp_path):
     assert str(exc_info.value).startswith(module.PRE_CLICK_ABORT_PREFIXES)
 
 
-def test_playwright_fallback_preserves_already_in_conversation(monkeypatch, tmp_path):
+def test_playwright_fallback_confirms_without_already_in_conversation(monkeypatch, tmp_path):
     module = load_remote_module(monkeypatch, tmp_path)
     detail_url = "https://www.zhipin.com/job_detail/example.html"
     target = SimpleNamespace(web_socket_debugger_url="ws://target")
@@ -1077,9 +1077,12 @@ def test_playwright_fallback_preserves_already_in_conversation(monkeypatch, tmp_
         )
     )
 
-    # The fallback detected an existing conversation; that signal must survive so
-    # process_job releases the reserved budget instead of recording a new contact.
-    assert details["already_in_conversation"] is True
+    # This fallback runs after the CDP click was dispatched, so a "继续沟通" it sees
+    # may be the result of that click. The contact is confirmed (post_click_verified)
+    # rather than released, and the already_in_conversation release flag is not set —
+    # otherwise a later run could message the same recruiter again.
+    assert details["post_click_verified"] is True
+    assert details.get("already_in_conversation") is not True
 
 
 def test_prior_llm_timeout_does_not_permanently_skip(monkeypatch, tmp_path):

@@ -280,6 +280,7 @@ class StateStore:
                 SELECT 1
                 FROM application_actions
                 WHERE job_id = ? AND action = ? AND dry_run = 0
+                  AND COALESCE(json_extract(details, '$.reserved'), 0) = 0
                 LIMIT 1
                 """,
                 (job_id, action.value),
@@ -411,6 +412,7 @@ class StateStore:
                 """
                 SELECT id FROM application_actions
                 WHERE job_id = ? AND action = ? AND dry_run = 0
+                  AND COALESCE(json_extract(details, '$.reserved'), 0) = 0
                 """,
                 (job_id, ApplicationAction.IMMEDIATE_CONTACT.value),
             ).fetchone()
@@ -418,6 +420,17 @@ class StateStore:
                 raise DuplicateActionError(
                     f"immediate_contact already recorded for job {job_id}"
                 )
+            # Clear a stale reservation from a prior run that died before confirming.
+            # The partial unique index allows only one dry_run=0 row per job, so the
+            # INSERT below would otherwise fail and the job would be skipped forever.
+            connection.execute(
+                """
+                DELETE FROM application_actions
+                WHERE job_id = ? AND action = ? AND dry_run = 0
+                  AND COALESCE(json_extract(details, '$.reserved'), 0) = 1
+                """,
+                (job_id, ApplicationAction.IMMEDIATE_CONTACT.value),
+            )
             row = connection.execute(
                 """
                 SELECT COUNT(*) AS count

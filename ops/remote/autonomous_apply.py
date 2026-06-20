@@ -482,11 +482,14 @@ async def playwright_click_immediate_contact(detail_url: str) -> dict[str, Any]:
                 "post_click_risks": risks,
             }
 
+        # Stay inside the selected job's box so a recommendation/sidebar card's
+        # control is never matched (mirrors the main CDP path).
+        detail_box = page.locator(".job-detail-box")
         existing_locators = []
         for selector in (".btn-startchat", ".btn-startchat-wrap", "a,button,[role=button]"):
             existing_locators.extend(
                 await _visible_locator_items(
-                    page.locator(selector).filter(has_text=re.compile("继续沟通|沟通中"))
+                    detail_box.locator(selector).filter(has_text=re.compile("继续沟通|沟通中"))
                 )
             )
             if len(existing_locators) == 1:
@@ -504,7 +507,7 @@ async def playwright_click_immediate_contact(detail_url: str) -> dict[str, Any]:
         contact_locators = []
         for selector in (".btn-startchat", ".btn-startchat-wrap", "a,button,[role=button]"):
             contact_locators = await _visible_locator_items(
-                page.locator(selector).filter(has_text="立即沟通")
+                detail_box.locator(selector).filter(has_text="立即沟通")
             )
             if contact_locators:
                 break
@@ -519,6 +522,7 @@ async def playwright_click_immediate_contact(detail_url: str) -> dict[str, Any]:
         button = contact_locators[0]
         button_text = (await button.inner_text(timeout=1000)).strip()
         button_box = await button.bounding_box()
+        before_text = await page.locator("body").inner_text(timeout=5000)
         await button.click(timeout=10000)
 
         post_text = ""
@@ -528,7 +532,11 @@ async def playwright_click_immediate_contact(detail_url: str) -> dict[str, Any]:
             await page.wait_for_timeout(1000)
             post_text = await page.locator("body").inner_text(timeout=5000)
             post_risks = visible_page_risk_payload(post_text)
-            verified = not post_risks and any(marker in post_text for marker in SUCCESS_MARKERS)
+            # Only a marker that newly appears after the click is evidence; markers
+            # already present beforehand (nav, an existing chat panel) are not.
+            verified = not post_risks and any(
+                marker in post_text and marker not in before_text for marker in SUCCESS_MARKERS
+            )
             if verified or post_risks:
                 break
         return {
@@ -695,12 +703,18 @@ async def click_immediate_contact(
             "post_click_risks": [],
             "needs_manual_verification": False,
         }
-    await cdp_dispatch_mouse_click(
-        target.web_socket_debugger_url,
-        float(result["x"]),
-        float(result["y"]),
-        bring_to_front=False,
-    )
+    try:
+        await cdp_dispatch_mouse_click(
+            target.web_socket_debugger_url,
+            float(result["x"]),
+            float(result["y"]),
+            bring_to_front=False,
+        )
+    except Exception as exc:
+        # The move/press/release sequence did not complete, so no platform click
+        # landed. Tag it as a pre-click abort so process_job releases the
+        # reservation instead of confirming a contact that never happened.
+        raise RuntimeError(f"contact_button_not_safe:dispatch_failed:{exc}") from exc
     fallback_navigation_used = False
     post_text = ""
     post_risks: list[dict[str, str]] = []
@@ -761,8 +775,10 @@ async def click_immediate_contact(
                 "clicked_label": str(playwright_details.get("clicked_label") or "立即沟通"),
                 "job_id": platform_job_id,
                 "before_url": detail_url,
-                "already_in_conversation": playwright_details.get("reason")
-                == "already_in_conversation",
+                # No already_in_conversation here: this branch runs after the CDP
+                # click was dispatched, so a "继续沟通" the fallback sees may be the
+                # result of that click. Confirm the contact rather than releasing it
+                # and risking a duplicate message on a later run.
                 "click_events": click_events[-8:],
                 "fallback_navigation_used": False,
                 "post_click_verified": True,

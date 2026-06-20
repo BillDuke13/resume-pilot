@@ -157,4 +157,25 @@ def test_reserve_contact_enforces_cap_atomically_and_can_release(tmp_path):
     store.release_contact(job_id)
     assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
     store.reserve_contact(second_id, daily_cap=1, when=now)
+    store.confirm_contact(second_id, details={"job_id": "job-2"})
     assert store.has_action(second_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+
+
+def test_orphan_reservation_is_not_a_contact_and_is_recoverable(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+
+    store.reserve_contact(job_id, daily_cap=5)
+    # A bare reservation (process killed before confirm) is not a completed contact,
+    # so a later run must not skip the job as already contacted.
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+
+    # The stale reservation must not block a retry on the next run.
+    store.reserve_contact(job_id, daily_cap=5)
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+
+    # Confirming turns it into a real contact that blocks duplicates.
+    store.confirm_contact(job_id, details={"job_id": "job-1"})
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+    with pytest.raises(DuplicateActionError):
+        store.reserve_contact(job_id, daily_cap=5)
