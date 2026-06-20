@@ -132,6 +132,10 @@ async def cdp_evaluate(web_socket_url: str, expression: str) -> Any:
                 while True:
                     response = json.loads(await socket.recv())
                     if response.get("id") == current_id:
+                        if "error" in response:
+                            raise CdpError(
+                                json.dumps(response["error"], ensure_ascii=False)[:1000]
+                            )
                         return response
 
             await send("Runtime.enable")
@@ -163,6 +167,10 @@ async def cdp_navigate(web_socket_url: str, url: str) -> None:
                 while True:
                     response = json.loads(await socket.recv())
                     if response.get("id") == current_id:
+                        if "error" in response:
+                            raise CdpError(
+                                json.dumps(response["error"], ensure_ascii=False)[:1000]
+                            )
                         return response
 
             await send("Page.enable", {})
@@ -218,6 +226,10 @@ async def cdp_dispatch_mouse_click(
                 while True:
                     response = json.loads(await socket.recv())
                     if response.get("id") == current_id:
+                        if "error" in response:
+                            raise CdpError(
+                                json.dumps(response["error"], ensure_ascii=False)[:1000]
+                            )
                         return response
 
             if bring_to_front:

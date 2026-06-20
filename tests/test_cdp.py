@@ -348,3 +348,15 @@ def test_cdp_evaluate_returns_value_without_exception(monkeypatch):
     result = asyncio.run(cdp.cdp_evaluate("ws://target", "'hello'"))
 
     assert result == "hello"
+
+
+def test_cdp_evaluate_raises_on_top_level_cdp_error(monkeypatch):
+    responses = [{"id": 1, "error": {"code": -32000, "message": "Target closed"}}]
+    monkeypatch.setattr(cdp.websockets, "connect", lambda *_a, **_k: _FakeCdpSocket(responses))
+
+    try:
+        asyncio.run(cdp.cdp_evaluate("ws://target", "document.title"))
+    except cdp.CdpError as exc:
+        assert "Target closed" in str(exc)
+    else:
+        raise AssertionError("expected CdpError on a top-level CDP error")

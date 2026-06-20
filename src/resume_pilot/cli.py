@@ -141,9 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a deterministic local decision for smoke tests instead of calling the LLM.",
     )
     run.add_argument(
-        "--profile-summary",
+        "--profile-summary-file",
+        type=Path,
         default=None,
-        help="Optional local resume profile summary.",
+        help="Path to a private resume profile summary file; defaults to the profile cache. "
+        "Avoid passing the summary text directly so it never reaches process arguments.",
     )
     run.add_argument(
         "--confirm-live-contact",
@@ -197,6 +199,23 @@ def _paths(args: argparse.Namespace) -> AppPaths:
         )
     paths.ensure_private()
     return paths
+
+
+def _load_profile_summary(paths: AppPaths, summary_file: Path | None) -> str | None:
+    source = summary_file or (paths.profile_cache if paths.profile_cache.exists() else None)
+    if source is None:
+        return None
+    try:
+        raw = source.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw.strip() or None
+    if isinstance(data, dict) and isinstance(data.get("text"), str):
+        return data["text"].strip() or None
+    return raw.strip() or None
 
 
 def _print_json(value: dict[str, Any]) -> None:
@@ -280,6 +299,7 @@ def cmd_profile_extract(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     paths = _paths(args)
     state = StateStore(paths.state_db)
+    profile_summary = _load_profile_summary(paths, args.profile_summary_file)
     if args.decision_fixture and not args.dry_run:
         print(
             "Live --execute cannot use --decision-fixture; it requires a real LLM decision.",
@@ -304,7 +324,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     dry_run=True,
                     daily_cap=args.daily_cap,
                     limit=args.limit,
-                    profile_summary=args.profile_summary,
+                    profile_summary=profile_summary,
                 )
             else:
                 if not args.confirm_live_contact:
@@ -319,7 +339,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     source_url=args.source_url,
                     daily_cap=args.daily_cap,
                     limit=args.limit,
-                    profile_summary=args.profile_summary,
+                    profile_summary=profile_summary,
                 )
         except HumanPauseRequired as exc:
             _print_json({"paused": True, "reason": exc.reason, "details": str(exc.details)})

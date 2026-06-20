@@ -130,3 +130,39 @@ def test_live_execute_requires_managed_browser(tmp_path, monkeypatch, capsys):
     assert exit_code == 3
     assert output["paused"] is True
     assert "managed_browser_not_running" in output["reason"]
+
+
+def test_load_profile_summary_reads_private_cache(tmp_path):
+    from resume_pilot.cli import _load_profile_summary
+    from resume_pilot.config import AppPaths
+
+    cache = tmp_path / "profile.json"
+    cache.write_text(json.dumps({"text": "Private candidate policy."}), encoding="utf-8")
+    paths = AppPaths(
+        state_db=tmp_path / "state.sqlite",
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+        chrome_profile=tmp_path / "chrome-profile",
+        profile_cache=cache,
+        browser_pid=tmp_path / "browser.pid",
+        browser_log=tmp_path / "browser.log",
+    )
+
+    assert _load_profile_summary(paths, None) == "Private candidate policy."
+
+
+def test_load_profile_summary_returns_none_without_cache_or_file(tmp_path):
+    from resume_pilot.cli import _load_profile_summary
+    from resume_pilot.config import AppPaths
+
+    paths = AppPaths(
+        state_db=tmp_path / "state.sqlite",
+        state_dir=tmp_path / "state",
+        data_dir=tmp_path / "data",
+        chrome_profile=tmp_path / "chrome-profile",
+        profile_cache=tmp_path / "missing-profile.json",
+        browser_pid=tmp_path / "browser.pid",
+        browser_log=tmp_path / "browser.log",
+    )
+
+    assert _load_profile_summary(paths, None) is None

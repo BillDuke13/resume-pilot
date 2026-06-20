@@ -30,7 +30,7 @@ from resume_pilot.cdp import (
     page_text,
     target_url_matches,
 )
-from resume_pilot.config import DEFAULT_DAILY_CAP, AppPaths, default_cdp_url
+from resume_pilot.config import DEFAULT_CLAUDE_MODEL, DEFAULT_DAILY_CAP, AppPaths, default_cdp_url
 from resume_pilot.llm import ClaudeCodeClient, InvalidLlmResponseError, LlmError, parse_job_decision
 from resume_pilot.models import ApplicationAction, JobCard, LlmJobDecision, LlmJobDecisionValue
 from resume_pilot.runner import build_job_decision_prompt, parse_monthly_salary_range_k
@@ -64,7 +64,10 @@ def is_allowed_boss_detail_url(url: str | None) -> bool:
 adapter = BossHtmlAdapter()
 paths = AppPaths.defaults()
 store = StateStore(paths.state_db)
-client = ClaudeCodeClient(timeout_seconds=180)
+client = ClaudeCodeClient(
+    model=os.environ.get("RESUME_PILOT_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
+    timeout_seconds=180,
+)
 
 
 class PolicyError(RuntimeError):
@@ -908,24 +911,35 @@ async def process_job(
         )
     except Exception as exc:
         message = str(exc)
-        if message.startswith(PRE_CLICK_ABORT_PREFIXES):
-            store.release_contact(job_id)
         store.finish_action_attempt(
             attempt_id,
             status="failed",
             details={"error": message, "job_id": job.platform_job_id},
         )
-        if message.startswith("contact_button_unavailable:"):
-            record_skip(job_id, "contact_button_unavailable", confidence=0.0)
-            emit(
-                "skip",
-                title=job.title,
-                salary=job.salary,
-                reason="contact_button_unavailable",
-                error=message[:500],
-            )
-            return True
-        pause("contact_click_failed", title=job.title, url=job.detail_url, error=message)
+        if message.startswith(PRE_CLICK_ABORT_PREFIXES):
+            store.release_contact(job_id)
+            if message.startswith("contact_button_unavailable:"):
+                record_skip(job_id, "contact_button_unavailable", confidence=0.0)
+                emit(
+                    "skip",
+                    title=job.title,
+                    salary=job.salary,
+                    reason="contact_button_unavailable",
+                    error=message[:500],
+                )
+                return True
+            pause("contact_click_failed", title=job.title, url=job.detail_url, error=message)
+            return False
+        store.confirm_contact(
+            job_id,
+            details={"job_id": job.platform_job_id, "error": message, "post_click_failure": True},
+        )
+        pause(
+            "contact_failed_after_possible_click",
+            title=job.title,
+            url=job.detail_url,
+            error=message,
+        )
         return False
 
     details = {**details, "attempt_id": attempt_id}

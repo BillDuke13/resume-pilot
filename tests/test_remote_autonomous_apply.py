@@ -732,3 +732,36 @@ def test_already_contacted_job_is_skipped_before_opening_detail(monkeypatch, tmp
 
     assert keep_going is True
     assert opened == []
+
+
+def test_autonomous_client_honors_claude_model_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("RESUME_PILOT_CLAUDE_MODEL", "custom-model-alias")
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    assert module.client.model == "custom-model-alias"
+
+
+def test_autonomous_post_click_failure_confirms_and_pauses(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+
+    async def fake_click(*_args, **_kwargs):
+        raise RuntimeError("post-click verification read failed")
+
+    monkeypatch.setattr(module, "client", _apply_client(module))
+    monkeypatch.setattr(module, "open_html", _detail_open_html)
+    monkeypatch.setattr(module, "click_immediate_contact", fake_click)
+
+    keep_going = asyncio.run(
+        module.process_job(
+            make_job(module), policy=make_policy(module, tmp_path), profile_summary="Policy."
+        )
+    )
+
+    assert keep_going is False
+    job = module.store.get_job_by_platform_id("boss:sample-k8s")
+    assert job["status"] == "awaiting_reply"
+    assert module.store.has_action(job["id"], module.ApplicationAction.IMMEDIATE_CONTACT) is True
+    assert any(
+        "contact_failed_after_possible_click" in p["details"]
+        for p in module.store.active_pauses()
+    )
