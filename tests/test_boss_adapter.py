@@ -77,6 +77,28 @@ def test_contact_button_ignores_plain_container_text():
     assert risks == []
 
 
+def test_can_click_contact_scopes_count_to_selected_detail_box():
+    adapter = BossHtmlAdapter()
+
+    can_click, risks = adapter.can_click_contact(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+          </div>
+          <div class="recommend-list">
+            <div class="job-card-wrapper"><a class="op-btn">立即沟通</a></div>
+          </div>
+        </div>
+        """
+    )
+
+    # A recommendation card's 立即沟通 outside the selected box must not count, so a
+    # selected job with exactly one contact button stays clickable.
+    assert can_click is True
+    assert risks == []
+
+
 def test_login_or_captcha_page_pauses_clicking():
     adapter = BossHtmlAdapter()
 

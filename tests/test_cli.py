@@ -243,15 +243,20 @@ _LIVE_CONTACT_DETAIL_HTML = (
 
 
 class _FakeButton:
-    def __init__(self, *, visible: bool = True, raise_on_click: bool = False):
+    def __init__(self, *, visible: bool = True, raise_on_click: bool = False, trial_error=None):
         self._visible = visible
         self._raise_on_click = raise_on_click
+        self._trial_error = trial_error
         self.clicked = False
 
     def is_visible(self, timeout=None) -> bool:
         return self._visible
 
-    def click(self, timeout=None) -> None:
+    def click(self, timeout=None, trial: bool = False) -> None:
+        if trial:
+            if self._trial_error is not None:
+                raise self._trial_error
+            return
         if self._raise_on_click:
             raise RuntimeError("element is not clickable: detached from DOM")
         self.clicked = True
@@ -281,12 +286,21 @@ class _FakeBodyLocator:
 
 class FakeContactPage:
     def __init__(
-        self, *, post_html: str, buttons, body_text: str, url: str, scan_error=None
+        self,
+        *,
+        post_html: str,
+        buttons,
+        body_text: str,
+        url: str,
+        scan_error=None,
+        before_body_text: str = "",
     ):
         self._snapshots = [_LIVE_CONTACT_DETAIL_HTML, post_html]
         self.url = url
         self._buttons = buttons
-        self._body_text = body_text
+        self._before_body_text = before_body_text
+        self._post_body_text = body_text
+        self._body_reads = 0
         self._scan_error = scan_error
         self.locator_selectors: list[str] = []
         self.waits = 0
@@ -302,7 +316,9 @@ class FakeContactPage:
     def locator(self, selector: str, has_text=None):
         self.locator_selectors.append(selector)
         if selector == "body":
-            return _FakeBodyLocator(self._body_text)
+            text = self._before_body_text if self._body_reads == 0 else self._post_body_text
+            self._body_reads += 1
+            return _FakeBodyLocator(text)
         return _FakeSelectorLocator(self._buttons, count_error=self._scan_error)
 
 
@@ -317,37 +333,66 @@ def test_live_contact_locator_includes_role_buttons():
     result = _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
 
     # The adapter accepts role="button" controls in button_labels(); the live click
-    # locator must scan the same shapes so an accepted control is actually clicked.
-    assert "a, button, [role=button]" in page.locator_selectors
+    # locator must scan the same shapes (scoped to the selected box) so an accepted
+    # control is actually clicked.
+    assert (
+        ".job-detail-box a, .job-detail-box button, .job-detail-box [role=button]"
+        in page.locator_selectors
+    )
     assert result["job_id"] == "test123"
 
 
-def test_live_contact_success_marker_must_be_visible_text():
+def test_live_contact_success_requires_newly_appearing_marker():
+    # Marker only in hidden raw HTML (not the visible body) -> not verified.
     hidden_marker = FakeContactPage(
-        post_html="<div class='job-detail'><script>聊天</script></div>",
+        post_html="<div class='job-detail'><script>继续沟通</script></div>",
         buttons=[_FakeButton(visible=True)],
+        before_body_text="立即沟通",
         body_text="对话尚未开始",
         url="https://www.zhipin.com/job_detail/test123.html",
     )
+    hidden = _click_unique_live_contact(hidden_marker, BossHtmlAdapter(), "test123")
+    assert hidden["post_click_verified"] is False
+    assert hidden["needs_manual_verification"] is True
 
-    result = _click_unique_live_contact(hidden_marker, BossHtmlAdapter(), "test123")
-
-    # "聊天" appears only in a hidden script, not the visible body, so success must
-    # not be inferred and a manual-verification pause is required.
-    assert result["post_click_verified"] is False
-    assert result["needs_manual_verification"] is True
-
-    visible_marker = FakeContactPage(
+    # Marker present before AND after the click (site nav) -> not newly appearing.
+    nav_marker = FakeContactPage(
         post_html="<div class='job-detail'>已进入会话</div>",
         buttons=[_FakeButton(visible=True)],
-        body_text="继续沟通 常用语",
+        before_body_text="继续沟通",
+        body_text="继续沟通",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+    nav = _click_unique_live_contact(nav_marker, BossHtmlAdapter(), "test123")
+    assert nav["post_click_verified"] is False
+    assert nav["needs_manual_verification"] is True
+
+    # A marker that appears only after the click confirms the contact.
+    transitioned = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话</div>",
+        buttons=[_FakeButton(visible=True)],
+        before_body_text="立即沟通",
+        body_text="继续沟通 发送简历",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+    confirmed = _click_unique_live_contact(transitioned, BossHtmlAdapter(), "test123")
+    assert confirmed["post_click_verified"] is True
+    assert confirmed["needs_manual_verification"] is False
+
+
+def test_live_contact_trial_failure_is_pre_click_abort():
+    page = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话</div>",
+        buttons=[_FakeButton(visible=True, trial_error=RuntimeError("not actionable"))],
+        body_text="继续沟通",
         url="https://www.zhipin.com/job_detail/test123.html",
     )
 
-    confirmed = _click_unique_live_contact(visible_marker, BossHtmlAdapter(), "test123")
-
-    assert confirmed["post_click_verified"] is True
-    assert confirmed["needs_manual_verification"] is False
+    # The control never becomes actionable, so the trial click fails before any
+    # mouse event — a pre-click abort the runner releases.
+    with pytest.raises(HumanPauseRequired) as exc_info:
+        _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
+    assert exc_info.value.reason == "contact_button_unclickable"
 
 
 def test_live_contact_locator_failure_is_pre_click_abort():

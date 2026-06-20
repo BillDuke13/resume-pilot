@@ -259,7 +259,12 @@ class BossHtmlAdapter:
 
     def can_click_contact(self, html: str) -> tuple[bool, list[PageRisk]]:
         risks = self.page_risks(html)
-        labels = self.button_labels(html, CONTACT_LABELS)
+        # Count contact controls within the selected job's box so a recommendation
+        # card's 立即沟通 elsewhere on the page cannot make the selected, otherwise
+        # valid posting look non-unique. Fall back to the whole page when no box is
+        # present (for example simplified inputs).
+        panel = BeautifulSoup(html, "html.parser").select_one(".job-detail-box")
+        labels = self.button_labels(str(panel) if panel else html, CONTACT_LABELS)
         if len(labels) != 1:
             risks.append(
                 PageRisk(

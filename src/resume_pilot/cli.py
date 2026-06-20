@@ -512,11 +512,16 @@ def _click_unique_live_contact(
 
     pattern = re.compile(r"^\s*立即沟通\s*$")
     visible_buttons = []
-    # Match the same control shapes the adapter accepts in button_labels()
-    # (anchors, buttons, and role="button" elements); a single comma selector
+    # Count contact controls only within the selected job's box (mirrors the
+    # adapter) so a recommendation card's 立即沟通 elsewhere on the page cannot make
+    # a valid posting look non-unique. Match the same shapes button_labels()
+    # accepts (anchors, buttons, role="button"); the single comma selector
     # de-duplicates via querySelectorAll so an element is never counted twice.
     try:
-        locator = page.locator("a, button, [role=button]", has_text=pattern)
+        locator = page.locator(
+            ".job-detail-box a, .job-detail-box button, .job-detail-box [role=button]",
+            has_text=pattern,
+        )
         for index in range(locator.count()):
             item = locator.nth(index)
             if item.is_visible(timeout=1_000):
@@ -537,20 +542,33 @@ def _click_unique_live_contact(
         )
 
     before_url = page.url
-    # A click can raise after the mouse event has already been dispatched (for
-    # example while waiting for a navigation it triggered). Let that exception
-    # propagate so the runner confirms a possible contact rather than releasing
-    # and risking a duplicate message to the same recruiter on retry.
+    before_text = _live_visible_text(page)
+    # Run actionability checks first without dispatching (trial=True). A failure
+    # here means the control never became clickable, so no mouse event was sent —
+    # a pre-click abort the runner releases rather than a burned cap/dedupe slot.
+    try:
+        visible_buttons[0].click(timeout=10_000, trial=True)
+    except Exception as exc:
+        raise HumanPauseRequired(
+            "contact_button_unclickable",
+            {"job_id": platform_job_id, "error": str(exc)},
+        ) from exc
+    # The control is actionable; the real click may dispatch the mouse event and
+    # then wait for a navigation it starts. If it raises now, the event may already
+    # have been sent, so let it propagate to the runner's confirm path instead of
+    # releasing and risking a duplicate message to the same recruiter on retry.
     visible_buttons[0].click(timeout=10_000)
     page.wait_for_timeout(1_500)
     post_click_html = _wait_for_live_page_html(page)
     post_click_risks = adapter.page_risks(post_click_html)
-    # Confirm success from the rendered, visible body text only. Raw HTML can
-    # carry success markers inside hidden templates, scripts, or global nav,
-    # which would skip the manual-verification pause after an ineffective click.
+    # Confirm success only from a marker that newly appears in the visible body
+    # after the click. Markers already present beforehand (site nav, a sidebar,
+    # another conversation) are not evidence that this contact opened a
+    # conversation, so they must not skip the manual-verification pause.
     post_click_text = _live_visible_text(page)
     post_click_verified = not post_click_risks and any(
-        marker in post_click_text for marker in POST_CONTACT_SUCCESS_MARKERS
+        marker in post_click_text and marker not in before_text
+        for marker in POST_CONTACT_SUCCESS_MARKERS
     )
     return {
         "clicked_label": "立即沟通",
