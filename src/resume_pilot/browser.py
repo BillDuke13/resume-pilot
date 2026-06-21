@@ -42,7 +42,9 @@ class BrowserStatus:
 def find_browser_binary() -> str | None:
     env_value = os.environ.get("RESUME_PILOT_CHROME_BIN")
     if env_value:
-        return env_value
+        # Validate the override so a typo/non-executable surfaces as a structured
+        # BrowserStatus error rather than crashing BrowserManager.start() at Popen.
+        return shutil.which(env_value)
     for candidate in BROWSER_CANDIDATES:
         path = shutil.which(candidate)
         if path:

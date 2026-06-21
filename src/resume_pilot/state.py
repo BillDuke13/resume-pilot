@@ -303,9 +303,11 @@ class StateStore:
     def has_active_action_attempt(
         self, job_id: int, action: ApplicationAction, *, when: datetime | None = None
     ) -> bool:
-        # An attempt left 'started'/'clicked' by a crashed run is treated as stale
-        # once it is older than the reservation TTL, so the stale-reservation
-        # recovery in reserve_contact stays reachable instead of being blocked here.
+        # A 'clicked' attempt means the contact click was dispatched, so a crashed
+        # run may already have messaged the recruiter: it keeps blocking indefinitely
+        # for manual reconciliation. A 'started' attempt (the click never returned) is
+        # treated as stale once older than the reservation TTL, so reserve_contact's
+        # recovery stays reachable instead of being blocked forever.
         active_since = isoformat_utc(
             (when or utc_now()) - timedelta(seconds=RESERVATION_TTL_SECONDS)
         )
@@ -314,8 +316,11 @@ class StateStore:
                 """
                 SELECT 1
                 FROM action_attempts
-                WHERE job_id = ? AND action = ? AND status IN ('started', 'clicked')
-                  AND updated_at >= ?
+                WHERE job_id = ? AND action = ?
+                  AND (
+                      status = 'clicked'
+                      OR (status = 'started' AND updated_at >= ?)
+                  )
                 LIMIT 1
                 """,
                 (job_id, action.value, active_since),

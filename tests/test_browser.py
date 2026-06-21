@@ -106,3 +106,13 @@ def test_start_refuses_non_loopback_cdp_host(tmp_path, monkeypatch):
     assert status.running is False
     assert "non-loopback" in (status.detail or "")
     assert launched == []
+
+
+def test_find_browser_binary_validates_chrome_bin_override(tmp_path, monkeypatch):
+    from resume_pilot.browser import find_browser_binary
+
+    monkeypatch.setenv("RESUME_PILOT_CHROME_BIN", str(tmp_path / "does-not-exist"))
+
+    # A non-executable override resolves to None so BrowserManager.start() returns a
+    # structured error instead of crashing at Popen with FileNotFoundError.
+    assert find_browser_binary() is None

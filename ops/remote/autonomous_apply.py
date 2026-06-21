@@ -644,9 +644,14 @@ async def click_immediate_contact(
       if (!scope) {
         return {ok: false, reason: 'visible_contact_button_not_unique', count: 0};
       }
+      const recExclude =
+        '[class*="recommend"], .look-job, .similar-job, .job-card-wrapper, .job-list';
       const findMatches = (selector, labels) => Array.from(
         scope.querySelectorAll(selector)
       ).filter((el) => {
+        if (el.closest(recExclude)) {
+          return false;
+        }
         const text = (el.innerText || '').replace(/\s+/g, ' ').trim();
         if (!labels.some((label) => text.includes(label)) || !visible(el)) {
           return false;

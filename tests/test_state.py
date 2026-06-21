@@ -229,3 +229,20 @@ def test_stale_action_attempt_does_not_block_forever(tmp_path):
         )
         is False
     )
+
+
+def test_stale_clicked_attempt_blocks_for_reconciliation(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    attempt_id = store.start_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT)
+    store.finish_action_attempt(attempt_id, status="clicked", details={})
+
+    # A dispatched ('clicked') attempt may already have messaged the recruiter, so it
+    # keeps blocking for manual reconciliation even once it is older than the TTL.
+    future = datetime.now(UTC) + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+    assert (
+        store.has_active_action_attempt(
+            job_id, ApplicationAction.IMMEDIATE_CONTACT, when=future
+        )
+        is True
+    )

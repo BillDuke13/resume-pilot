@@ -1154,6 +1154,9 @@ def test_cdp_contact_search_is_scoped_to_selected_detail_box(monkeypatch, tmp_pa
     assert ".job-detail-box" in source
     assert "scope.querySelectorAll" in source
     assert "document.querySelectorAll" not in source
+    # Nested recommendation containers inside the box must be excluded too.
+    assert ".closest(" in source
+    assert "recommend" in source
 
 
 def test_cdp_dispatch_failure_distinguishes_pre_and_post_dispatch(monkeypatch, tmp_path):
