@@ -229,6 +229,9 @@ dom-dumps/
 audit/
 run-artifacts/
 
+# Personal, untracked Claude Code instructions
+CLAUDE.local.md
+
 # Agent-local memory and handoff artifacts
 .codex/
 .claude/
