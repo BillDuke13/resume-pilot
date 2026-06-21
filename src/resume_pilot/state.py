@@ -280,6 +280,12 @@ class StateStore:
                   AND (
                       COALESCE(json_extract(details, '$.reserved'), 0) = 0
                       OR created_at >= ?
+                      OR EXISTS (
+                          SELECT 1 FROM action_attempts
+                          WHERE action_attempts.job_id = application_actions.job_id
+                            AND action_attempts.action = application_actions.action
+                            AND action_attempts.status IN ('started', 'clicked')
+                      )
                   )
                 """,
                 (action.value, day, active_since),

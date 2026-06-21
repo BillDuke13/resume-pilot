@@ -145,7 +145,10 @@ class ResumePilotRunner:
                 "page_risk_before_run",
                 details={"risks": [risk.__dict__ for risk in risks], "source_url": source_url},
             )
-            raise HumanPauseRequired("page_risk_before_run", {"risks": risks})
+            raise HumanPauseRequired(
+                "page_risk_before_run",
+                {"risks": [risk.__dict__ for risk in risks]},
+            )
 
         jobs = self.adapter.extract_job_cards(html, source_url=source_url)
         if not dry_run and len(jobs) != 1:

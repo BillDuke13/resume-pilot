@@ -231,6 +231,21 @@ def test_started_attempt_blocks_until_reconciled(tmp_path):
     )
 
 
+def test_stale_reservation_with_active_attempt_still_counts_toward_cap(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_id, daily_cap=5, when=old)
+    store.start_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT)
+
+    # The reservation is stale, but its crashed 'started' attempt may already have
+    # consumed a real platform action, so it keeps counting toward the daily cap
+    # until reconciled.
+    assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT, when=later) == 1
+
+
 def test_stale_clicked_attempt_blocks_for_reconciliation(tmp_path):
     store = StateStore(tmp_path / "state.sqlite")
     job_id, _ = store.upsert_job(make_job())

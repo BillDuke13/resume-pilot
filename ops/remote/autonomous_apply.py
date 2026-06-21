@@ -451,7 +451,15 @@ async def _visible_locator_items(locator: Any) -> list[Any]:
     for index in range(await locator.count()):
         item = locator.nth(index)
         try:
-            if await item.is_visible(timeout=1000):
+            if not await item.is_visible(timeout=1000):
+                continue
+            # Skip controls nested in a recommendation card BOSS renders inside the
+            # selected box, so the fallback cannot count/click a recommendation.
+            in_recommendation = await item.evaluate(
+                'el => !!el.closest(\'[class*="recommend"], .look-job, '
+                '.similar-job, .job-card-wrapper, .job-list\')'
+            )
+            if not in_recommendation:
                 items.append(item)
         except Exception:
             continue

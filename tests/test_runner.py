@@ -412,6 +412,27 @@ def test_indeterminate_click_failure_confirms_contact_and_pauses(tmp_path):
     )
 
 
+def test_page_risk_pause_returns_structured_risk_details(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    runner = ResumePilotRunner(
+        state=store,
+        llm_client=FakeLlmClient(),
+        adapter=BossHtmlAdapter(),
+    )
+
+    with pytest.raises(HumanPauseRequired) as exc_info:
+        runner.evaluate_static_html(
+            "<html><body>请完成 安全验证 验证码</body></html>",
+            source_url="https://www.zhipin.com/web/geek/jobs",
+            dry_run=True,
+            daily_cap=1,
+        )
+
+    # The pause details carry structured {reason, evidence} dicts, not PageRisk reprs.
+    risks = exc_info.value.details["risks"]
+    assert risks and all(isinstance(risk, dict) and "reason" in risk for risk in risks)
+
+
 class MalformedLlmClient:
     def run_json(self, _prompt: str) -> str:
         return "this is not valid json output"
