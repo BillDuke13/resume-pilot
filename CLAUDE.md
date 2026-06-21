@@ -35,7 +35,7 @@ This automates a live third-party platform. The design is deliberately defensive
 
 ## LLM integration
 
-The LLM is the `claude` **CLI invoked as a subprocess** (`llm.py` → `claude -p --bare --model <m> --tools "" --disallowedTools "mcp__*" --no-session-persistence --output-format json`), **not** the Anthropic API/SDK. The default model alias `kimi-k2.7-code` (override via `RESUME_PILOT_CLAUDE_MODEL`) is **not** an Anthropic model — don't assume Anthropic-API behavior. Employer/job text is untrusted: it is wrapped in `<untrusted_job_posting>` and the prompt treats it as data, never instructions. Matching policy is passed to the LLM as context, never compiled into a source-level allow/reject list.
+The LLM is the `claude` **CLI invoked as a subprocess** (`llm.py` → `claude -p --bare --model <m> --tools "" --disallowedTools "mcp__*" --no-session-persistence --output-format json`), **not** the Anthropic API/SDK. The default model alias `kimi-k2.7-code` (override via `RESUME_PILOT_CLAUDE_MODEL`) is **not** an Anthropic model — don't assume Anthropic-API behavior. Employer/job text is untrusted: it is wrapped in `<untrusted_job_posting>` and the prompt treats it as data, never instructions. Matching is mostly delegated to the LLM rather than compiled into source-level allow/reject logic — with one deliberate exception: a **salary floor gate** (`runner._salary_gate_decision`, `autonomous_apply.salary_skip_reason`). When `minimum_monthly_salary_k` is set, jobs whose parsed salary is below it (or unparseable) are deterministically skipped *before* the LLM is called; don't remove or bypass it.
 
 ## Secrets & repository hygiene (public repo — enforce strictly)
 
