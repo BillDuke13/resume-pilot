@@ -405,6 +405,7 @@ def test_pauses_list_and_resolve(tmp_path, capsys):
     listed = json.loads(capsys.readouterr().out)
     assert len(listed["active_pauses"]) == 1
     assert listed["active_pauses"][0]["reason"] == "page_risk_on_search"
+    assert listed["active_pauses"][0]["details"] == {"keyword": "k8s"}
 
     assert main(["--state-db", str(db), "pauses", "resolve"]) == 0
     assert json.loads(capsys.readouterr().out)["resolved"] == 1
@@ -428,6 +429,42 @@ def test_live_contact_unverified_when_pre_click_read_failed():
     # appeared and the contact stays unverified (manual-verification pause fires).
     assert result["post_click_verified"] is False
     assert result["needs_manual_verification"] is True
+
+
+def test_live_execute_blocked_by_unresolved_pause(tmp_path, capsys):
+    from resume_pilot.state import StateStore
+
+    db = tmp_path / "state.sqlite"
+    StateStore(db).pause("contact_click_needs_manual_verification", details={"job_id": "x"})
+
+    exit_code = main(
+        [
+            "--state-db",
+            str(db),
+            "run",
+            "--execute",
+            "--confirm-live-contact",
+            "--source-url",
+            "https://www.zhipin.com/web/geek/jobs",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 3
+    assert output["paused"] is True
+    assert output["reason"] == "unresolved_pauses_block_live_run"
+
+
+def test_inbox_watch_pauses_on_security_page(tmp_path, capsys):
+    html_file = tmp_path / "inbox.html"
+    html_file.write_text("<html><body>请完成 安全验证 验证码</body></html>", encoding="utf-8")
+
+    exit_code = main(["inbox", "watch", "--dry-run", "--html-file", str(html_file)])
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 3
+    assert output["status"] == "paused"
+    assert output["reason"] == "page_risk_on_inbox"
 
 
 def test_live_contact_locator_failure_is_pre_click_abort():

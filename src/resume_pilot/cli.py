@@ -304,7 +304,12 @@ def cmd_pauses(args: argparse.Namespace) -> int:
     _print_json(
         {
             "active_pauses": [
-                {"id": row["id"], "reason": row["reason"], "created_at": row["created_at"]}
+                {
+                    "id": row["id"],
+                    "reason": row["reason"],
+                    "created_at": row["created_at"],
+                    "details": json.loads(row["details"]) if row["details"] else {},
+                }
                 for row in store.active_pauses()
             ]
         }
@@ -370,6 +375,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     return 2
+                active = state.active_pauses()
+                if active:
+                    # Mirror the autonomous startup gate: refuse to open the browser
+                    # and click while a prior pause awaits manual takeover.
+                    _print_json(
+                        {
+                            "paused": True,
+                            "reason": "unresolved_pauses_block_live_run",
+                            "active_pauses": [row["reason"] for row in active],
+                        }
+                    )
+                    return 3
                 summary = _execute_live_run(
                     runner,
                     paths=paths,
@@ -413,6 +430,19 @@ def cmd_inbox_watch(args: argparse.Namespace) -> int:
         if args.html_file
         else _read_live_page_html(args.url)
     )
+    risks = adapter.page_risks(html)
+    if risks:
+        # A logged-out or security-verification inbox page must stop for manual
+        # takeover, not silently report zero candidates.
+        _print_json(
+            {
+                "dry_run": True,
+                "status": "paused",
+                "reason": "page_risk_on_inbox",
+                "risks": [risk.__dict__ for risk in risks],
+            }
+        )
+        return 3
     replies = adapter.extract_recruiter_replies(html)
     candidates = [reply for reply in replies if adapter.reply_is_candidate_for_resume(reply)]
     _print_json(

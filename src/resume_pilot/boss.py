@@ -133,11 +133,17 @@ def _candidate_card(anchor: Tag) -> Tag:
 class BossHtmlAdapter:
     base_url: str = "https://www.zhipin.com"
 
-    def extract_job_cards(self, html: str, *, source_url: str) -> list[JobCard]:
+    def extract_job_cards(
+        self, html: str, *, source_url: str, include_detail_pane: bool = True
+    ) -> list[JobCard]:
         soup = BeautifulSoup(html, "html.parser")
-        detail_card = self._extract_selected_detail_card(soup, source_url=source_url)
-        if detail_card is not None:
-            return [detail_card]
+        # Search crawls pass include_detail_pane=False so an auto-selected detail
+        # pane does not short-circuit extraction to a single card and hide the rest
+        # of the list results.
+        if include_detail_pane:
+            detail_card = self._extract_selected_detail_card(soup, source_url=source_url)
+            if detail_card is not None:
+                return [detail_card]
         cards: dict[str, JobCard] = {}
         anchors = [
             anchor

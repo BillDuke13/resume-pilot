@@ -1066,7 +1066,7 @@ async def main() -> int:
         if risks:
             pause("page_risk_on_search", keyword=keyword, url=url, risks=risks)
             return 2
-        jobs = adapter.extract_job_cards(html, source_url=url)
+        jobs = adapter.extract_job_cards(html, source_url=url, include_detail_pane=False)
         emit("jobs_found", keyword=keyword, count=len(jobs))
         for list_job in jobs:
             if list_job.platform_job_id in seen:
