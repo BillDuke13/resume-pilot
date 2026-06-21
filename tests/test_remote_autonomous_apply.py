@@ -1213,3 +1213,34 @@ def test_cdp_dispatch_failure_distinguishes_pre_and_post_dispatch(monkeypatch, t
                 target, platform_job_id="boss:example", detail_url=detail_url
             )
         )
+
+
+def test_merge_detail_job_replaces_placeholder_list_fields(monkeypatch, tmp_path):
+    module = load_remote_module(monkeypatch, tmp_path)
+    list_job = module.JobCard(
+        platform_job_id="boss:x",
+        title="Unknown role",
+        company="Unknown company",
+        source_url="https://www.zhipin.com/web/geek/jobs",
+        detail_url="https://www.zhipin.com/job_detail/x.html",
+        salary=None,
+        location=None,
+        raw_text="",
+    )
+    detail_html = """
+    <div class="job-detail-container"><div class="job-detail-box">
+      <div class="job-detail-header">
+        <div class="job-detail-info">Real Engineer 30-50K</div>
+        <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+      </div>
+      <div class="job-boss-info"><div class="boss-info-attr">Real Corp · HR</div></div>
+    </div></div>
+    """
+
+    merged = module.merge_detail_job(
+        list_job, detail_html, "https://www.zhipin.com/job_detail/x.html"
+    )
+
+    # Placeholder list fields are replaced by the real detail-page title/company.
+    assert merged.title == "Real Engineer"
+    assert merged.company == "Real Corp"

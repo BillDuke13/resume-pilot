@@ -154,6 +154,63 @@ def test_selected_detail_id_prefers_detail_url_over_recommendation_link():
     assert jobs[0].platform_job_id == "selected-real"
 
 
+def test_recommendation_inside_detail_box_is_not_borrowed_for_selected_job():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Selected Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">继续沟通</a></div>
+            </div>
+            <div class="recommend-list">
+              <div class="job-card-wrapper" data-job-id="reco-999">
+                <a class="job-name" href="/job_detail/reco-999.html">Recommended 8-10K</a>
+                <a class="op-btn">立即沟通</a>
+              </div>
+            </div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/selected.html",
+    )
+
+    # The selected job is already in conversation; a recommendation rendered inside
+    # the same box must not lend its 立即沟通 button or its id to the selected job.
+    ids = {job.platform_job_id for job in jobs}
+    titles = {job.title for job in jobs}
+    assert "Selected Engineer" not in titles
+    assert "reco-999" not in ids
+    assert "selected" not in ids
+
+
+def test_detail_company_fallback_does_not_use_sidebar_recommendation():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Selected Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+          </div>
+          <aside class="company-name">Recommended Sidebar Corp</aside>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/selected.html",
+    )
+
+    # The selected box has no company; the fallback must stay inside it rather than
+    # borrowing a sidebar recommendation's company from elsewhere in the document.
+    assert jobs[0].company != "Recommended Sidebar Corp"
+    assert jobs[0].company == "Unknown company"
+
+
 def test_login_or_captcha_page_pauses_clicking():
     adapter = BossHtmlAdapter()
 

@@ -393,14 +393,23 @@ def _match_detail_card(cards: list[JobCard], detail_url: str) -> JobCard | None:
     return None
 
 
+def _prefer_detail(list_value: str, detail_value: str | None, placeholder: str) -> str:
+    """Keep a real list value, but let detail-page data replace a placeholder."""
+    if list_value and list_value != placeholder:
+        return list_value
+    return detail_value or list_value
+
+
 def merge_detail_job(list_job: JobCard, detail_html: str, detail_url: str) -> JobCard:
     text = html_to_text(detail_html)
     extracted = adapter.extract_job_cards(detail_html, source_url=detail_url)
     detail = _match_detail_card(extracted, detail_url)
     return JobCard(
         platform_job_id=list_job.platform_job_id,
-        title=list_job.title or (detail.title if detail else "Unknown role"),
-        company=list_job.company or (detail.company if detail else "Unknown company"),
+        title=_prefer_detail(list_job.title, detail.title if detail else None, "Unknown role"),
+        company=_prefer_detail(
+            list_job.company, detail.company if detail else None, "Unknown company"
+        ),
         source_url=list_job.source_url,
         detail_url=detail_url,
         salary=(detail.salary if detail and detail.salary else list_job.salary),

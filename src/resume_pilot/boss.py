@@ -83,20 +83,28 @@ def _selected_detail_job_id(panel: Tag, source_url: str | None = None) -> str | 
     a descendant /job_detail/ link (which may belong to a recommendation card), and
     only falls back to the volatile data-lid token last.
     """
-    for element in (panel, *panel.find_all(True)):
+    # 1. the panel's own platform id attribute (authoritative for the selected job).
+    for attr in ("data-job-id", "data-jobid"):
+        value = panel.get(attr)
+        if value:
+            return str(value)
+    # 2. the current detail URL identifies the selected job; prefer it over any
+    #    descendant id/link, which may belong to a recommendation card.
+    url_id = _detail_url_job_id(source_url) if source_url else None
+    if url_id:
+        return url_id
+    # 3. a descendant platform id attribute, then a /job_detail/ link.
+    for element in panel.find_all(True):
         for attr in ("data-job-id", "data-jobid"):
             value = element.get(attr)
             if value:
                 return str(value)
-    url_id = _detail_url_job_id(source_url) if source_url else None
-    if url_id:
-        return url_id
     for anchor in panel.find_all("a", href=True):
         job_id = _detail_url_job_id(str(anchor["href"]))
         if job_id:
             return job_id
-    # data-lid is a volatile list/session token; use it only as a last resort so
-    # reopening the same posting from another search does not change the id.
+    # 4. data-lid is a volatile list/session token; use it only as a last resort so
+    #    reopening the same posting from another search does not change the id.
     for element in (panel, *panel.find_all(True)):
         value = element.get("data-lid")
         if value:
@@ -210,6 +218,14 @@ class BossHtmlAdapter:
         detail = soup.select_one(".job-detail-box")
         if not detail:
             return None
+        # BOSS renders recommendation/list cards inside .job-detail-box; remove them
+        # so contactability, id, title, and company are read from the selected job
+        # only, never a recommendation that happens to share the box.
+        for rec in detail.select(
+            '[class*="recommend"], .look-job, .similar-job, .job-card-wrapper, .job-list'
+        ):
+            if not rec.decomposed:
+                rec.decompose()
         raw_text = normalize_text(detail.get_text(" "))
         if not raw_text or "立即沟通" not in raw_text:
             return None
@@ -220,7 +236,10 @@ class BossHtmlAdapter:
         title, salary = _split_title_salary(title_text)
         company = (
             _company_from_boss_attr(_first_text(detail, (".boss-info-attr",)))
-            or _first_text(soup, (".job-boss-info .boss-info-attr", ".boss-name", ".company-name"))
+            or _first_text(
+                detail,
+                (".job-boss-info .boss-info-attr", ".boss-name", ".company-name"),
+            )
             or "Unknown company"
         )
         location = _first_text(detail, (".location", ".job-area", ".company-location"))
