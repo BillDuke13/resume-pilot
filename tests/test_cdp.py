@@ -397,3 +397,58 @@ def test_cdp_evaluate_times_out_on_stuck_target(monkeypatch):
         assert "timed out" in str(exc)
     else:
         raise AssertionError("expected CdpError on a stuck CDP target")
+
+
+class _DispatchSocket:
+    def __init__(self, *, fail_send_on=None, error_recv_on=None):
+        self._sends = 0
+        self._recvs = 0
+        self._fail_send_on = fail_send_on
+        self._error_recv_on = error_recv_on
+        self._last_id = 0
+
+    async def send(self, message):
+        self._sends += 1
+        self._last_id = json.loads(message)["id"]
+        if self._fail_send_on == self._sends:
+            raise ConnectionError("socket closed mid-send")
+
+    async def recv(self):
+        self._recvs += 1
+        if self._error_recv_on == self._recvs:
+            return json.dumps({"id": self._last_id, "error": {"message": "boom"}})
+        return json.dumps({"id": self._last_id, "result": {}})
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+def test_cdp_dispatch_pre_send_failure_is_not_dispatched(monkeypatch):
+    # The mousePressed send (the 2nd send with bring_to_front=False) fails outright.
+    monkeypatch.setattr(
+        cdp.websockets, "connect", lambda *_a, **_k: _DispatchSocket(fail_send_on=2)
+    )
+    try:
+        asyncio.run(cdp.cdp_dispatch_mouse_click("ws://target", 1.0, 2.0, bring_to_front=False))
+    except cdp.CdpClickError as exc:
+        # No button event left the client, so it stays a pre-click abort.
+        assert exc.dispatched is False
+    else:
+        raise AssertionError("expected CdpClickError when the press send fails")
+
+
+def test_cdp_dispatch_marks_dispatched_after_press_is_sent(monkeypatch):
+    # The press is sent, then its response carries an error.
+    monkeypatch.setattr(
+        cdp.websockets, "connect", lambda *_a, **_k: _DispatchSocket(error_recv_on=2)
+    )
+    try:
+        asyncio.run(cdp.cdp_dispatch_mouse_click("ws://target", 1.0, 2.0, bring_to_front=False))
+    except cdp.CdpClickError as exc:
+        # The press left the client before the failure, so the click may have landed.
+        assert exc.dispatched is True
+    else:
+        raise AssertionError("expected CdpClickError when the press response fails")

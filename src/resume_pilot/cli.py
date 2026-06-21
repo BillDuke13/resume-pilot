@@ -591,7 +591,10 @@ def _click_unique_live_contact(
     # another conversation) are not evidence that this contact opened a
     # conversation, so they must not skip the manual-verification pause.
     post_click_text = _live_visible_text(page)
-    post_click_verified = not post_click_risks and any(
+    # before_text is empty only when the pre-click read failed; without that
+    # baseline a marker cannot be proven newly appeared, so leave the contact
+    # unverified and let the manual-verification pause fire.
+    post_click_verified = bool(before_text) and not post_click_risks and any(
         marker in post_click_text and marker not in before_text
         for marker in POST_CONTACT_SUCCESS_MARKERS
     )

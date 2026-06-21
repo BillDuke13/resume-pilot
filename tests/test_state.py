@@ -211,3 +211,21 @@ def test_resolve_pauses_clears_active_pauses(tmp_path):
     assert len(store.active_pauses()) == 2
     assert store.resolve_pauses() == 2
     assert store.active_pauses() == []
+
+
+def test_stale_action_attempt_does_not_block_forever(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    store.start_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT)
+
+    # A fresh 'started' attempt blocks an automatic retry.
+    assert store.has_active_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+    # Once older than the TTL (a crashed run), it is stale and no longer blocks, so
+    # the reservation-recovery path stays reachable.
+    future = datetime.now(UTC) + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+    assert (
+        store.has_active_action_attempt(
+            job_id, ApplicationAction.IMMEDIATE_CONTACT, when=future
+        )
+        is False
+    )

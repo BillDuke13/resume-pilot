@@ -300,16 +300,25 @@ class StateStore:
             ).fetchone()
             return row is not None
 
-    def has_active_action_attempt(self, job_id: int, action: ApplicationAction) -> bool:
+    def has_active_action_attempt(
+        self, job_id: int, action: ApplicationAction, *, when: datetime | None = None
+    ) -> bool:
+        # An attempt left 'started'/'clicked' by a crashed run is treated as stale
+        # once it is older than the reservation TTL, so the stale-reservation
+        # recovery in reserve_contact stays reachable instead of being blocked here.
+        active_since = isoformat_utc(
+            (when or utc_now()) - timedelta(seconds=RESERVATION_TTL_SECONDS)
+        )
         with self.connect() as connection:
             row = connection.execute(
                 """
                 SELECT 1
                 FROM action_attempts
                 WHERE job_id = ? AND action = ? AND status IN ('started', 'clicked')
+                  AND updated_at >= ?
                 LIMIT 1
                 """,
-                (job_id, action.value),
+                (job_id, action.value, active_since),
             ).fetchone()
             return row is not None
 

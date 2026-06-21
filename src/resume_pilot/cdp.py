@@ -255,12 +255,21 @@ async def cdp_dispatch_mouse_click(
         async with websockets.connect(web_socket_url, max_size=30_000_000) as socket:
             next_id = 1
 
-            async def send(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-                nonlocal next_id
+            async def send(
+                method: str,
+                params: dict[str, Any] | None = None,
+                *,
+                marks_dispatch: bool = False,
+            ) -> dict[str, Any]:
+                nonlocal next_id, button_event_sent
                 message: dict[str, Any] = {"id": next_id, "method": method}
                 if params is not None:
                     message["params"] = params
                 await socket.send(json.dumps(message))
+                if marks_dispatch:
+                    # The button event left the client; a later recv failure means it
+                    # may already have reached the page, so treat it as a possible click.
+                    button_event_sent = True
                 current_id = next_id
                 next_id += 1
                 while True:
@@ -286,10 +295,6 @@ async def cdp_dispatch_mouse_click(
                     raise CdpError(json.dumps(response["error"], ensure_ascii=False))
 
             for event_type in ("mouseMoved", "mousePressed", "mouseReleased"):
-                if event_type != "mouseMoved":
-                    # A button press/release is about to go out; once attempted the
-                    # page may register the click, so a later failure is post-dispatch.
-                    button_event_sent = True
                 response = await send(
                     "Input.dispatchMouseEvent",
                     {
@@ -300,6 +305,7 @@ async def cdp_dispatch_mouse_click(
                         "buttons": 1 if event_type == "mousePressed" else 0,
                         "clickCount": 1,
                     },
+                    marks_dispatch=event_type != "mouseMoved",
                 )
                 if "error" in response:
                     raise CdpError(json.dumps(response["error"], ensure_ascii=False))

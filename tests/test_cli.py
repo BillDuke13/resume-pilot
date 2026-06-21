@@ -413,6 +413,23 @@ def test_pauses_list_and_resolve(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["active_pauses"] == []
 
 
+def test_live_contact_unverified_when_pre_click_read_failed():
+    page = FakeContactPage(
+        post_html="<div class='job-detail'>已进入会话</div>",
+        buttons=[_FakeButton(visible=True)],
+        before_body_text="",
+        body_text="继续沟通",
+        url="https://www.zhipin.com/job_detail/test123.html",
+    )
+
+    result = _click_unique_live_contact(page, BossHtmlAdapter(), "test123")
+
+    # An empty pre-click read gives no baseline, so a marker cannot be proven newly
+    # appeared and the contact stays unverified (manual-verification pause fires).
+    assert result["post_click_verified"] is False
+    assert result["needs_manual_verification"] is True
+
+
 def test_live_contact_locator_failure_is_pre_click_abort():
     page = FakeContactPage(
         post_html="<div class='job-detail'>已进入会话</div>",
