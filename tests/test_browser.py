@@ -116,3 +116,22 @@ def test_find_browser_binary_validates_chrome_bin_override(tmp_path, monkeypatch
     # A non-executable override resolves to None so BrowserManager.start() returns a
     # structured error instead of crashing at Popen with FileNotFoundError.
     assert find_browser_binary() is None
+
+
+def test_pid_is_managed_browser_requires_exact_user_data_dir_arg(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    manager = BrowserManager(paths)
+    profile = paths.chrome_profile
+
+    # Exact --user-data-dir launch argument: this is our managed browser.
+    managed = b"\x00".join(
+        [b"chromium", f"--user-data-dir={profile}".encode(), b"--no-first-run"]
+    )
+    monkeypatch.setattr("pathlib.Path.read_bytes", lambda _self: managed)
+    assert manager._pid_is_managed_browser(4242) is True
+
+    # A reused PID running an unrelated command that merely mentions the profile path
+    # (e.g. a grep over it) must not be mistaken for the managed browser.
+    unrelated = b"\x00".join([b"grep", b"-r", b"needle", str(profile).encode()])
+    monkeypatch.setattr("pathlib.Path.read_bytes", lambda _self: unrelated)
+    assert manager._pid_is_managed_browser(4242) is False

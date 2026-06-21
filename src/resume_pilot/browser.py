@@ -186,17 +186,19 @@ class BrowserManager:
         """Confirm the stored PID still belongs to this profile's browser.
 
         Guards against killing an unrelated process that reused a stale PID. The
-        check reads ``/proc/<pid>/cmdline`` and requires the managed profile path
-        to appear in the launch arguments. When the command line cannot be read
-        (process gone, no permission, or no procfs), it is treated as not managed,
-        so the caller clears the stale pid file instead of sending a signal.
+        check reads ``/proc/<pid>/cmdline`` (NUL-separated argv) and requires the
+        exact ``--user-data-dir=<profile>`` launch argument, so a reused PID running
+        an unrelated command that merely mentions the profile path is not mistaken
+        for the managed browser. When the command line cannot be read (process gone,
+        no permission, or no procfs), it is treated as not managed, so the caller
+        clears the stale pid file instead of sending a signal.
         """
         try:
             cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
         except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
             return False
-        arguments = cmdline.decode("utf-8", errors="replace")
-        return str(self.paths.chrome_profile) in arguments
+        arguments = cmdline.decode("utf-8", errors="replace").split("\0")
+        return f"--user-data-dir={self.paths.chrome_profile}" in arguments
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:

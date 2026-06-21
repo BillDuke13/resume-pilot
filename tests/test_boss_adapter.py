@@ -348,6 +348,31 @@ def test_detail_card_parses_annual_pay_salary_suffix():
     assert jobs[0].salary == "30-60K·15薪"
 
 
+def test_detail_card_recovers_salary_from_separate_element():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Senior Backend Engineer</div>
+              <span class="salary">30-60K</span>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="job-boss-info"><div class="boss-info-attr">Example Tech · HR</div></div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs",
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Senior Backend Engineer"
+    assert jobs[0].salary == "30-60K"
+
+
 def test_detail_card_job_id_is_stable_across_volatile_page_text():
     adapter = BossHtmlAdapter()
 

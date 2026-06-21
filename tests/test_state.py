@@ -261,3 +261,20 @@ def test_stale_clicked_attempt_blocks_for_reconciliation(tmp_path):
         )
         is True
     )
+
+
+def test_reserve_contact_cap_counts_stale_reservation_with_active_attempt(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_a, _ = store.upsert_job(make_job())
+    job_b, _ = store.upsert_job(make_job("job-2"))
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_a, daily_cap=1, when=old)
+    store.start_action_attempt(job_a, ApplicationAction.IMMEDIATE_CONTACT)
+
+    # Job A's reservation is stale, but its crashed 'started' attempt may already
+    # have consumed a platform action. The atomic reserve cap check must keep
+    # counting it, so job B cannot exceed the daily cap before reconciliation.
+    with pytest.raises(BudgetExceededError):
+        store.reserve_contact(job_b, daily_cap=1, when=later)

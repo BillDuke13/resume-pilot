@@ -283,6 +283,11 @@ class BossHtmlAdapter:
         if not title_text:
             return None
         title, salary = _split_title_salary(title_text)
+        if salary is None:
+            salary = (
+                _first_text(detail, (".salary", ".red", "[data-role='salary']"))
+                or _salary_from_text(raw_text)
+            )
         company = (
             _company_from_boss_attr(_first_text(detail, (".boss-info-attr",)))
             or _first_text(
