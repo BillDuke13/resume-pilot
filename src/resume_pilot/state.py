@@ -303,27 +303,20 @@ class StateStore:
     def has_active_action_attempt(
         self, job_id: int, action: ApplicationAction, *, when: datetime | None = None
     ) -> bool:
-        # A 'clicked' attempt means the contact click was dispatched, so a crashed
-        # run may already have messaged the recruiter: it keeps blocking indefinitely
-        # for manual reconciliation. A 'started' attempt (the click never returned) is
-        # treated as stale once older than the reservation TTL, so reserve_contact's
-        # recovery stays reachable instead of being blocked forever.
-        active_since = isoformat_utc(
-            (when or utc_now()) - timedelta(seconds=RESERVATION_TTL_SECONDS)
-        )
+        # Any attempt still in 'started'/'clicked' means a run crashed mid-contact:
+        # the click may already have been dispatched, so it blocks indefinitely and
+        # requires manual reconciliation. Only attempts explicitly finished — 'failed'
+        # (a pre-click abort), 'recorded', or 'already_in_conversation' — are inactive.
+        # (`when` is accepted for call-site compatibility but no longer used.)
         with self.connect() as connection:
             row = connection.execute(
                 """
                 SELECT 1
                 FROM action_attempts
-                WHERE job_id = ? AND action = ?
-                  AND (
-                      status = 'clicked'
-                      OR (status = 'started' AND updated_at >= ?)
-                  )
+                WHERE job_id = ? AND action = ? AND status IN ('started', 'clicked')
                 LIMIT 1
                 """,
-                (job_id, action.value, active_since),
+                (job_id, action.value),
             ).fetchone()
             return row is not None
 

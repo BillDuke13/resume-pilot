@@ -491,8 +491,9 @@ def _read_live_page_html(url: str | None) -> str:
             page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         return _wait_for_live_page_html(page)
     finally:
-        if browser:
-            browser.close()
+        # Only detach from the managed CDP browser. browser.close() on a connected
+        # browser disconnects AND clears its contexts/pages (force-quit-like), which
+        # would disrupt the user's logged-in VNC session needed by later steps.
         if playwright:
             playwright.stop()
 
@@ -542,8 +543,9 @@ def _execute_live_run(
             contact_executor=contact_executor,
         )
     finally:
-        if browser:
-            browser.close()
+        # Only detach from the managed CDP browser. browser.close() on a connected
+        # browser disconnects AND clears its contexts/pages (force-quit-like), which
+        # would disrupt the user's logged-in VNC session needed by later steps.
         if playwright:
             playwright.stop()
 
@@ -585,7 +587,15 @@ def _click_unique_live_contact(
         )
         for index in range(locator.count()):
             item = locator.nth(index)
-            if item.is_visible(timeout=1_000):
+            if not item.is_visible(timeout=1_000):
+                continue
+            # Skip controls nested in a recommendation card BOSS renders inside the
+            # box, so a valid selected posting is not counted as non-unique.
+            in_recommendation = item.evaluate(
+                'el => !!el.closest(\'[class*="recommend"], .look-job, '
+                '.similar-job, .job-card-wrapper, .job-list\')'
+            )
+            if not in_recommendation:
                 visible_buttons.append(item)
     except Exception as exc:
         # Locating and visibility checks run before any mouse event, so a detached
@@ -657,8 +667,9 @@ def _read_live_page_text(url: str | None) -> str:
             page.goto(url, wait_until="domcontentloaded")
         return page.locator("body").inner_text(timeout=10_000)
     finally:
-        if browser:
-            browser.close()
+        # Only detach from the managed CDP browser. browser.close() on a connected
+        # browser disconnects AND clears its contexts/pages (force-quit-like), which
+        # would disrupt the user's logged-in VNC session needed by later steps.
         if playwright:
             playwright.stop()
 

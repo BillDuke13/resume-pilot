@@ -211,6 +211,50 @@ def test_detail_company_fallback_does_not_use_sidebar_recommendation():
     assert jobs[0].company == "Unknown company"
 
 
+def test_can_click_contact_excludes_recommendations_inside_box():
+    adapter = BossHtmlAdapter()
+
+    can_click, risks = adapter.can_click_contact(
+        """
+        <div class="job-detail-box">
+          <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+          <div class="recommend-list">
+            <div class="job-card-wrapper"><a class="op-btn">立即沟通</a></div>
+          </div>
+        </div>
+        """
+    )
+
+    # The recommendation's 立即沟通 nested in the box must not count, so the selected
+    # job's single contact button stays unique and clickable.
+    assert can_click is True
+    assert risks == []
+
+
+def test_crawl_recovers_javascript_only_list_cards():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-list">
+          <li class="job-card-wrapper" data-job-id="js-only-1">
+            <span class="job-name">JS Engineer</span>
+            <span class="salary">30-50K</span>
+            <span class="company-name">Example Tech</span>
+          </li>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/web/geek/jobs",
+        include_detail_pane=False,
+    )
+
+    # A JavaScript-clickable card without an <a href> is recovered from its id/title
+    # attributes instead of being silently dropped.
+    job = next(j for j in jobs if j.platform_job_id == "js-only-1")
+    assert job.title == "JS Engineer"
+    assert "/job_detail/js-only-1.html" in job.detail_url
+
+
 def test_login_or_captcha_page_pauses_clicking():
     adapter = BossHtmlAdapter()
 

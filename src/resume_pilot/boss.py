@@ -75,6 +75,18 @@ def _stable_job_id(*parts: str | None) -> str:
     return f"derived-{digest[:16]}"
 
 
+_DETAIL_RECOMMENDATION_SELECTOR = (
+    '[class*="recommend"], .look-job, .similar-job, .job-card-wrapper, .job-list'
+)
+
+
+def _strip_detail_recommendations(box: Tag) -> None:
+    """Remove recommendation/list cards BOSS nests inside a selected detail box."""
+    for rec in box.select(_DETAIL_RECOMMENDATION_SELECTOR):
+        if not rec.decomposed:
+            rec.decompose()
+
+
 def _selected_detail_job_id(panel: Tag, source_url: str | None = None) -> str | None:
     """Return the platform job id carried by a selected detail panel, if any.
 
@@ -206,6 +218,47 @@ class BossHtmlAdapter:
                     location=location,
                     raw_text=raw_text,
                 )
+        # JS-clickable list cards expose no <a href="/job_detail/...">; recover them
+        # from their container's id/title attributes so a search crawl does not
+        # silently report zero jobs.
+        for card in soup.select("[data-job-id], [data-jobid]"):
+            if not isinstance(card, Tag):
+                continue
+            job_id_attr = str(card.get("data-job-id") or card.get("data-jobid") or "")
+            if not job_id_attr or job_id_attr in cards:
+                continue
+            if any(
+                "/job_detail/" in str(link.get("href")) for link in card.find_all("a", href=True)
+            ):
+                continue
+            title = _first_text(card, (".job-name", ".job-title", "[data-role='job-title']", "h3"))
+            if not title:
+                continue
+            data_url = str(card.get("data-url") or "")
+            detail_url = urljoin(
+                source_url or self.base_url,
+                data_url if "/job_detail/" in data_url else f"/job_detail/{job_id_attr}.html",
+            )
+            raw_text = normalize_text(card.get_text(" "))
+            cards[job_id_attr] = JobCard(
+                platform_job_id=job_id_attr,
+                title=title,
+                company=(
+                    _first_text(
+                        card,
+                        (".company-name", ".company-text", ".company", "[data-role='company']"),
+                    )
+                    or "Unknown company"
+                ),
+                source_url=source_url,
+                detail_url=detail_url,
+                salary=(
+                    _first_text(card, (".salary", ".red", "[data-role='salary']"))
+                    or _salary_from_text(raw_text)
+                ),
+                location=_first_text(card, (".job-area", ".location", "[data-role='location']")),
+                raw_text=raw_text,
+            )
         return list(cards.values())
 
     def _extract_selected_detail_card(
@@ -221,11 +274,7 @@ class BossHtmlAdapter:
         # BOSS renders recommendation/list cards inside .job-detail-box; remove them
         # so contactability, id, title, and company are read from the selected job
         # only, never a recommendation that happens to share the box.
-        for rec in detail.select(
-            '[class*="recommend"], .look-job, .similar-job, .job-card-wrapper, .job-list'
-        ):
-            if not rec.decomposed:
-                rec.decompose()
+        _strip_detail_recommendations(detail)
         raw_text = normalize_text(detail.get_text(" "))
         if not raw_text or "立即沟通" not in raw_text:
             return None
@@ -298,6 +347,8 @@ class BossHtmlAdapter:
         # valid posting look non-unique. Fall back to the whole page when no box is
         # present (for example simplified inputs).
         panel = BeautifulSoup(html, "html.parser").select_one(".job-detail-box")
+        if panel is not None:
+            _strip_detail_recommendations(panel)
         labels = self.button_labels(str(panel) if panel else html, CONTACT_LABELS)
         if len(labels) != 1:
             risks.append(

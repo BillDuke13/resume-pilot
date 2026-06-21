@@ -254,6 +254,9 @@ class _FakeButton:
     def is_visible(self, timeout=None) -> bool:
         return self._visible
 
+    def evaluate(self, _expression) -> bool:
+        return False
+
     def click(self, timeout=None, trial: bool = False) -> None:
         if trial:
             if self._trial_error is not None:
