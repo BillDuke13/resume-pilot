@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import stat
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from resume_pilot.models import ApplicationAction, JobCard, LlmJobDecision, LlmJobDecisionValue
+from resume_pilot.state import (
+    RESERVATION_TTL_SECONDS,
+    BudgetExceededError,
+    DuplicateActionError,
+    StateStore,
+)
+
+
+def make_job(platform_job_id: str = "job-1") -> JobCard:
+    return JobCard(
+        platform_job_id=platform_job_id,
+        title="Python Automation Engineer",
+        company="Example Tech",
+        source_url="https://www.zhipin.com/web/geek/job",
+        detail_url=f"https://www.zhipin.com/job_detail/{platform_job_id}.html",
+        salary="30-45K",
+        location="Beijing",
+        raw_text="Python Automation Engineer Example Tech 30-45K Beijing",
+    )
+
+
+def make_decision(decision: LlmJobDecisionValue) -> LlmJobDecision:
+    return LlmJobDecision(
+        decision=decision,
+        confidence=0.91,
+        reason="Strong match",
+        resume_match_signals=["Python", "browser automation"],
+        risk_flags=[],
+    )
+
+
+def test_upsert_job_deduplicates_by_platform_id(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    first_id, inserted = store.upsert_job(make_job())
+    second_id, second_inserted = store.upsert_job(make_job())
+
+    assert inserted is True
+    assert second_inserted is False
+    assert first_id == second_id
+
+
+def test_state_db_file_is_private(tmp_path):
+    path = tmp_path / "state.sqlite"
+    StateStore(path)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_record_decision_updates_status(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+
+    store.record_job_decision(job_id, make_decision(LlmJobDecisionValue.APPLY))
+
+    assert store.get_job(job_id)["status"] == "approved"
+
+
+def test_contact_consumes_daily_budget_and_blocks_duplicates(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+
+    store.record_contact(job_id, daily_cap=1, when=now)
+
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+
+    with pytest.raises(DuplicateActionError):
+        store.record_contact(job_id, daily_cap=1, when=now)
+
+    second_id, _ = store.upsert_job(make_job("job-2"))
+    with pytest.raises(BudgetExceededError):
+        store.record_contact(second_id, daily_cap=1, when=now)
+
+
+def test_dry_run_action_does_not_consume_budget_or_change_status(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+
+    store.record_contact(job_id, daily_cap=1, dry_run=True, when=now)
+
+    assert store.action_count(store_action_immediate_contact(), when=now) == 0
+    assert store.get_job(job_id)["status"] == "discovered"
+
+
+def test_active_action_attempt_blocks_automatic_retry(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+
+    attempt_id = store.start_action_attempt(
+        job_id,
+        ApplicationAction.IMMEDIATE_CONTACT,
+        details={"source": "test"},
+    )
+
+    assert store.has_active_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+
+    store.finish_action_attempt(attempt_id, status="failed", details={"error": "before click"})
+
+    assert store.has_active_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+
+
+def test_pause_records_active_pause(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+
+    pause_id = store.pause("security_verification", details={"evidence": "captcha"})
+
+    pauses = store.active_pauses()
+    assert pause_id == pauses[0]["id"]
+    assert pauses[0]["reason"] == "security_verification"
+
+
+def store_action_immediate_contact():
+    from resume_pilot.models import ApplicationAction
+
+    return ApplicationAction.IMMEDIATE_CONTACT
+
+
+def test_dry_run_action_does_not_block_a_later_real_contact(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+
+    store.record_contact(job_id, daily_cap=1, dry_run=True, when=now)
+    store.record_contact(job_id, daily_cap=1, when=now)
+
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+    assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT, when=now) == 1
+
+
+def test_record_job_decision_does_not_downgrade_contacted_job(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    store.record_contact(job_id, daily_cap=1)
+    assert store.get_job(job_id)["status"] == "awaiting_reply"
+
+    store.record_job_decision(job_id, make_decision(LlmJobDecisionValue.SKIP))
+
+    assert store.get_job(job_id)["status"] == "awaiting_reply"
+
+
+def test_reserve_contact_enforces_cap_atomically_and_can_release(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    second_id, _ = store.upsert_job(make_job("job-2"))
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+
+    store.reserve_contact(job_id, daily_cap=1, when=now)
+    with pytest.raises(BudgetExceededError):
+        store.reserve_contact(second_id, daily_cap=1, when=now)
+
+    store.release_contact(job_id)
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+    store.reserve_contact(second_id, daily_cap=1, when=now)
+    store.confirm_contact(second_id, details={"job_id": "job-2"})
+    assert store.has_action(second_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+
+
+def test_orphan_reservation_is_not_a_contact_and_is_recoverable(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_id, daily_cap=5, when=old)
+    # A bare reservation (process killed before confirm) is not a completed contact.
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+    # A still-active reservation blocks a concurrent duplicate.
+    with pytest.raises(DuplicateActionError):
+        store.reserve_contact(job_id, daily_cap=5, when=old)
+    # Once it is stale (older than the TTL), a later run recovers and retries it.
+    store.reserve_contact(job_id, daily_cap=5, when=later)
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is False
+    # Confirming turns it into a real contact that blocks duplicates.
+    store.confirm_contact(job_id, details={"job_id": "job-1"})
+    assert store.has_action(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+    with pytest.raises(DuplicateActionError):
+        store.reserve_contact(job_id, daily_cap=5, when=later)
+
+
+def test_stale_reservation_does_not_consume_daily_cap(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_a, _ = store.upsert_job(make_job("job-a"))
+    job_b, _ = store.upsert_job(make_job("job-b"))
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_a, daily_cap=1, when=old)
+    # Job A's reservation goes stale; with cap=1 it must not block job B's contact.
+    assert store.can_record_contact(daily_cap=1, when=later) is True
+    store.reserve_contact(job_b, daily_cap=1, when=later)
+    store.confirm_contact(job_b, details={"job_id": "job-b"})
+    assert store.has_action(job_b, ApplicationAction.IMMEDIATE_CONTACT) is True
+
+
+def test_resolve_pauses_clears_active_pauses(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    store.pause("page_risk_on_search", details={"keyword": "k8s"})
+    store.pause("contact_click_needs_manual_verification", details={"job_id": "x"})
+
+    assert len(store.active_pauses()) == 2
+    assert store.resolve_pauses() == 2
+    assert store.active_pauses() == []
+
+
+def test_started_attempt_blocks_until_reconciled(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    store.start_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT)
+
+    # A 'started' attempt may have crashed mid-dispatch (the click could already have
+    # been sent), so it keeps blocking indefinitely for manual reconciliation rather
+    # than being auto-recovered after the TTL.
+    assert store.has_active_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT) is True
+    future = datetime.now(UTC) + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+    assert (
+        store.has_active_action_attempt(
+            job_id, ApplicationAction.IMMEDIATE_CONTACT, when=future
+        )
+        is True
+    )
+
+
+def test_stale_reservation_with_active_attempt_still_counts_toward_cap(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_id, daily_cap=5, when=old)
+    store.start_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT)
+
+    # The reservation is stale, but its crashed 'started' attempt may already have
+    # consumed a real platform action, so it keeps counting toward the daily cap
+    # until reconciled.
+    assert store.action_count(ApplicationAction.IMMEDIATE_CONTACT, when=later) == 1
+
+
+def test_stale_clicked_attempt_blocks_for_reconciliation(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_id, _ = store.upsert_job(make_job())
+    attempt_id = store.start_action_attempt(job_id, ApplicationAction.IMMEDIATE_CONTACT)
+    store.finish_action_attempt(attempt_id, status="clicked", details={})
+
+    # A dispatched ('clicked') attempt may already have messaged the recruiter, so it
+    # keeps blocking for manual reconciliation even once it is older than the TTL.
+    future = datetime.now(UTC) + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+    assert (
+        store.has_active_action_attempt(
+            job_id, ApplicationAction.IMMEDIATE_CONTACT, when=future
+        )
+        is True
+    )
+
+
+def test_reserve_contact_cap_counts_stale_reservation_with_active_attempt(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite")
+    job_a, _ = store.upsert_job(make_job())
+    job_b, _ = store.upsert_job(make_job("job-2"))
+    old = datetime(2026, 6, 19, 1, 0, tzinfo=UTC)
+    later = old + timedelta(seconds=RESERVATION_TTL_SECONDS + 60)
+
+    store.reserve_contact(job_a, daily_cap=1, when=old)
+    store.start_action_attempt(job_a, ApplicationAction.IMMEDIATE_CONTACT)
+
+    # Job A's reservation is stale, but its crashed 'started' attempt may already
+    # have consumed a platform action. The atomic reserve cap check must keep
+    # counting it, so job B cannot exceed the daily cap before reconciliation.
+    with pytest.raises(BudgetExceededError):
+        store.reserve_contact(job_b, daily_cap=1, when=later)
