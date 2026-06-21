@@ -219,7 +219,8 @@ tempCodeRunnerFile.py
 state.sqlite
 state.sqlite-journal
 autonomous-policy.json
-profile*.json
+profile-analysis.json
+profile.json
 chrome-profile/
 browser.pid
 browser.log
