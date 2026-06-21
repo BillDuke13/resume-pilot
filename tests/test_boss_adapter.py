@@ -128,6 +128,32 @@ def test_search_crawl_extracts_list_cards_despite_detail_pane():
     assert "reco" not in ids
 
 
+def test_selected_detail_id_prefers_detail_url_over_recommendation_link():
+    adapter = BossHtmlAdapter()
+
+    jobs = adapter.extract_job_cards(
+        """
+        <div class="job-detail-container">
+          <div class="job-detail-box">
+            <div class="job-detail-header">
+              <div class="job-detail-info">Selected Engineer 30-50K</div>
+              <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+            </div>
+            <div class="job-detail-body">职位描述 Python</div>
+            <div class="recommend-list">
+              <a class="job-name" href="/job_detail/reco-other.html">Recommended 8-10K</a>
+            </div>
+          </div>
+        </div>
+        """,
+        source_url="https://www.zhipin.com/job_detail/selected-real.html",
+    )
+
+    # The selected job has no data-job-id; its id must come from the detail URL, not
+    # the recommendation link rendered inside the same box.
+    assert jobs[0].platform_job_id == "selected-real"
+
+
 def test_login_or_captcha_page_pauses_clicking():
     adapter = BossHtmlAdapter()
 

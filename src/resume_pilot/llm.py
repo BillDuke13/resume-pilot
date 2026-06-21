@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -98,10 +99,11 @@ def parse_job_decision(raw_output: str) -> LlmJobDecision:
     if (
         isinstance(confidence, bool)
         or not isinstance(confidence, int | float)
+        or not math.isfinite(confidence)
         or confidence < 0
         or confidence > 1
     ):
-        raise InvalidLlmResponseError("Field 'confidence' must be a number from 0 to 1")
+        raise InvalidLlmResponseError("Field 'confidence' must be a finite number from 0 to 1")
 
     return LlmJobDecision(
         decision=decision,
@@ -141,6 +143,7 @@ class ClaudeCodeClient:
                 [
                     self.executable,
                     "-p",
+                    "--bare",
                     "--model",
                     self.model,
                     "--tools",

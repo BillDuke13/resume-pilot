@@ -75,11 +75,12 @@ def _stable_job_id(*parts: str | None) -> str:
     return f"derived-{digest[:16]}"
 
 
-def _selected_detail_job_id(panel: Tag) -> str | None:
+def _selected_detail_job_id(panel: Tag, source_url: str | None = None) -> str | None:
     """Return the platform job id carried by a selected detail panel, if any.
 
     Scoped to the panel so sibling recommendation links cannot leak their ids in.
-    Prefers stable ids — data-job-id/data-jobid, then a /job_detail/ link — and
+    Prefers stable ids — data-job-id/data-jobid, then the current detail URL — over
+    a descendant /job_detail/ link (which may belong to a recommendation card), and
     only falls back to the volatile data-lid token last.
     """
     for element in (panel, *panel.find_all(True)):
@@ -87,6 +88,9 @@ def _selected_detail_job_id(panel: Tag) -> str | None:
             value = element.get(attr)
             if value:
                 return str(value)
+    url_id = _detail_url_job_id(source_url) if source_url else None
+    if url_id:
+        return url_id
     for anchor in panel.find_all("a", href=True):
         job_id = _detail_url_job_id(str(anchor["href"]))
         if job_id:
@@ -222,8 +226,7 @@ class BossHtmlAdapter:
         location = _first_text(detail, (".location", ".job-area", ".company-location"))
         detail_box = soup.select_one(".job-detail-box") or detail
         platform_job_id = (
-            _selected_detail_job_id(detail_box)
-            or _detail_url_job_id(source_url)
+            _selected_detail_job_id(detail_box, source_url=source_url)
             or _stable_job_id(title, company)
         )
         return JobCard(

@@ -158,6 +158,38 @@ def test_run_json_disables_builtin_tools(monkeypatch):
     assert args[args.index("--tools") + 1] == ""
 
 
+def test_run_json_isolates_ambient_context_with_bare(monkeypatch):
+    client = ClaudeCodeClient()
+    monkeypatch.setattr(ClaudeCodeClient, "available", lambda _self: True)
+    captured: dict[str, object] = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client.run_json("untrusted job-page text")
+
+    # --bare skips ambient CLAUDE.md/hooks/skills/auto-memory that could otherwise
+    # override the guarded decision prompt before a real contact.
+    assert "--bare" in captured["args"]
+
+
+def test_parse_job_decision_rejects_nan_confidence():
+    with pytest.raises(InvalidLlmResponseError):
+        parse_job_decision(
+            """
+            {
+              "decision": "apply",
+              "confidence": NaN,
+              "reason": "NaN must not pass the numeric safety gate",
+              "resume_match_signals": [],
+              "risk_flags": []
+            }
+            """
+        )
+
+
 def test_run_json_denies_mcp_tools_and_session_persistence(monkeypatch):
     client = ClaudeCodeClient()
     monkeypatch.setattr(ClaudeCodeClient, "available", lambda _self: True)
