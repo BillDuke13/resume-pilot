@@ -144,6 +144,12 @@ class BossHtmlAdapter:
             detail_card = self._extract_selected_detail_card(soup, source_url=source_url)
             if detail_card is not None:
                 return [detail_card]
+        else:
+            # Crawl mode: drop the auto-selected detail pane so its recommendation
+            # links are not mistaken for search-result list cards.
+            for pane in soup.select(".job-detail-box, .job-detail-container"):
+                if not pane.decomposed:
+                    pane.decompose()
         cards: dict[str, JobCard] = {}
         anchors = [
             anchor

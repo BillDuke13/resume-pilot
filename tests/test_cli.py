@@ -231,6 +231,8 @@ def test_live_execute_rejects_non_loopback_cdp_host(tmp_path, monkeypatch, capsy
     assert exit_code == 3
     assert output["paused"] is True
     assert "cdp_host_not_loopback" in output["reason"]
+    # Pause details are structured JSON (not a stringified Python repr).
+    assert output["details"]["cdp_host"] == "0.0.0.0"
 
 
 _LIVE_CONTACT_DETAIL_HTML = (
@@ -465,6 +467,34 @@ def test_inbox_watch_pauses_on_security_page(tmp_path, capsys):
     assert exit_code == 3
     assert output["status"] == "paused"
     assert output["reason"] == "page_risk_on_inbox"
+
+
+def test_inbox_watch_live_read_persists_page_risk_pause(tmp_path, capsys, monkeypatch):
+    import resume_pilot.cli as cli_module
+    from resume_pilot.state import StateStore
+
+    db = tmp_path / "state.sqlite"
+    monkeypatch.setattr(
+        cli_module, "_read_live_page_html", lambda _url: "<body>请完成 安全验证 验证码</body>"
+    )
+
+    exit_code = main(
+        [
+            "--state-db",
+            str(db),
+            "inbox",
+            "watch",
+            "--dry-run",
+            "--url",
+            "https://www.zhipin.com/web/geek/chat",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 3
+    assert output["reason"] == "page_risk_on_inbox"
+    # A live risk page persists the pause so the next contact run's gate also blocks.
+    assert any(p["reason"] == "page_risk_on_inbox" for p in StateStore(db).active_pauses())
 
 
 def test_live_contact_locator_failure_is_pre_click_abort():

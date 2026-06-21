@@ -106,6 +106,9 @@ def test_search_crawl_extracts_list_cards_despite_detail_pane():
       <div class="job-detail-box">
         <div class="job-detail-info">Selected 30-50K</div>
         <div class="job-detail-op"><a class="op-btn">立即沟通</a></div>
+        <div class="recommend-list">
+          <a class="job-name" href="/job_detail/reco.html">Recommended 8-10K</a>
+        </div>
       </div>
     </div>
     <div class="job-list">
@@ -117,9 +120,12 @@ def test_search_crawl_extracts_list_cards_despite_detail_pane():
 
     # The default detail-pane path returns only the auto-selected card.
     assert len(adapter.extract_job_cards(html, source_url=url)) == 1
-    # Search-crawl mode skips the detail pane and returns every list card.
+    # Search-crawl mode skips the detail pane and returns every list card, but not
+    # the recommendation links rendered inside that pane.
     crawl = adapter.extract_job_cards(html, source_url=url, include_detail_pane=False)
-    assert {"aaa", "bbb"} <= {job.platform_job_id for job in crawl}
+    ids = {job.platform_job_id for job in crawl}
+    assert {"aaa", "bbb"} <= ids
+    assert "reco" not in ids
 
 
 def test_login_or_captcha_page_pauses_clicking():

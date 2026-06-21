@@ -236,7 +236,7 @@ def _load_profile_summary(paths: AppPaths, summary_file: Path | None) -> str | N
 
 
 def _print_json(value: dict[str, Any]) -> None:
-    print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True, default=str))
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -396,7 +396,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     profile_summary=profile_summary,
                 )
         except HumanPauseRequired as exc:
-            _print_json({"paused": True, "reason": exc.reason, "details": str(exc.details)})
+            _print_json({"paused": True, "reason": exc.reason, "details": exc.details})
             return 3
         _print_json(summary.__dict__)
         return 0
@@ -411,7 +411,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             profile_summary=profile_summary,
         )
     except HumanPauseRequired as exc:
-        _print_json({"paused": True, "reason": exc.reason, "details": str(exc.details)})
+        _print_json({"paused": True, "reason": exc.reason, "details": exc.details})
         return 3
     _print_json(summary.__dict__)
     return 0
@@ -433,13 +433,19 @@ def cmd_inbox_watch(args: argparse.Namespace) -> int:
     risks = adapter.page_risks(html)
     if risks:
         # A logged-out or security-verification inbox page must stop for manual
-        # takeover, not silently report zero candidates.
+        # takeover, not silently report zero candidates. Persist the pause for live
+        # reads so the next contact run's startup gate also blocks.
+        risk_payload = [risk.__dict__ for risk in risks]
+        if args.html_file is None:
+            StateStore(_paths(args).state_db).pause(
+                "page_risk_on_inbox", details={"risks": risk_payload, "url": args.url}
+            )
         _print_json(
             {
                 "dry_run": True,
                 "status": "paused",
                 "reason": "page_risk_on_inbox",
-                "risks": [risk.__dict__ for risk in risks],
+                "risks": risk_payload,
             }
         )
         return 3
